@@ -1,0 +1,6 @@
+- install curl.exe
+- install pwsh 7
+- install git
+- install python
+- install node
+- install go
