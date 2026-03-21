@@ -44,6 +44,18 @@ type Config struct {
 	AgentWrapPath  string
 }
 
+func parseFilterSenders(val string) []string {
+	var filters []string
+	for _, s := range strings.Split(val, ",") {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" {
+			continue
+		}
+		filters = append(filters, s)
+	}
+	return filters
+}
+
 func initDB() (*sql.DB, error) {
 	os.MkdirAll(filepath.Dir(DB_FILE), 0755)
 	db, err := sql.Open("sqlite", DB_FILE)
@@ -89,10 +101,7 @@ func loadEnv() (Config, error) {
 		case "MAIL_IMAP_SERVER":
 			config.MailImapServer = val
 		case "MAIL_FILTER_SENDER":
-			senders := strings.Split(val, ",")
-			for _, s := range senders {
-				config.FilterSenders = append(config.FilterSenders, strings.ToLower(strings.TrimSpace(s)))
-			}
+			config.FilterSenders = parseFilterSenders(val)
 		case "AGENT_WRAP_PATH":
 			config.AgentWrapPath = val
 		}
@@ -100,11 +109,48 @@ func loadEnv() (Config, error) {
 	return config, nil
 }
 
+func reloadFilterSendersFromEnv() ([]string, error) {
+	f, err := os.Open(".env")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		if key != "MAIL_FILTER_SENDER" {
+			continue
+		}
+
+		val := strings.TrimSpace(parts[1])
+		return parseFilterSenders(val), nil
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return []string{}, nil
+}
+
 // --- Check Mail Logic ---
 
-func checkAndProcessEmails(c *client.Client, config Config, db *sql.DB) {
+func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB) {
 	os.MkdirAll(PENDING_DIR, 0755)
 	os.MkdirAll(MEDIA_DIR, 0755)
+
+	if filters, err := reloadFilterSendersFromEnv(); err != nil {
+		log.Printf("[check_mail] [!] Reload MAIL_FILTER_SENDER from .env failed: %v (keeping previous filter)", err)
+	} else {
+		config.FilterSenders = filters
+	}
 
 	_, err := c.Select("INBOX", false)
 	if err != nil {
@@ -416,7 +462,7 @@ func runGateway(config Config, db *sql.DB, stopChan chan bool, errChan chan<- er
 	defer dispatchTicker.Stop()
 
 	// Initial check keeps startup behavior close to the previous version.
-	checkAndProcessEmails(c, config, db)
+	checkAndProcessEmails(c, &config, db)
 	dispatch(config)
 
 	for {
@@ -425,7 +471,7 @@ func runGateway(config Config, db *sql.DB, stopChan chan bool, errChan chan<- er
 			fmt.Println("[gateway] Stopping...")
 			return
 		case <-checkTicker.C:
-			checkAndProcessEmails(c, config, db)
+			checkAndProcessEmails(c, &config, db)
 			if err := c.Noop(); err != nil {
 				select {
 				case errChan <- fmt.Errorf("check_mail connection lost: %w", err):
