@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ type Dispatcher struct {
 	AgentWrapPath string
 	FeishuClient  *lark.Client
 	mu            sync.Mutex
+	outboxMu      sync.Mutex
 }
 
 type replyAction struct {
@@ -74,11 +76,6 @@ func (d *Dispatcher) Dispatch() bool {
 
 	if !d.callAgent(processingPaths) {
 		log.Printf("[dispatch] [!] Gemini run failed, leaving %d files in processing for retry", len(processingPaths))
-		return false
-	}
-
-	if err := d.executeReplyActions(processingPaths); err != nil {
-		log.Printf("[dispatch] [!] Reply action execution failed: %v", err)
 		return false
 	}
 
@@ -161,12 +158,14 @@ func (d *Dispatcher) callAgent(files []string) bool {
 		absFiles = append(absFiles, af)
 	}
 	fileList := strings.Join(absFiles, ", ")
-	prompt := fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理消息: %s 。
-- 使用 find-previous-email 技能查找上下文
+prompt := fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理消息: %s 。
+- 收到每条需要回复的飞书消息后，先只基于消息本体立刻给用户一个简短、让人安心的快速回复，不要等待上下文检索完成。
+- 使用 find-previous-message 技能，基于当前消息文件路径查找上下文
+- 查清上下文、完成所有相关工作后，再给用户一条全面、精确、专业的最终回复。
 - 遵从消息中的指令
 - 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
 - 如果需要回复邮件，使用 send-email 技能。
-- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.json 的文件。
+- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.json 的文件。快速回复和最终回复都用这个机制；快速回复先创建一次，最终回复稍后再创建一次。
 - reply json 格式固定为 {"type":"reply_feishu","message_id":"原消息MessageID","text":"回复内容"}，只允许输出一个飞书文本回复。
 `, absInit, fileList)
 
@@ -191,9 +190,27 @@ func (d *Dispatcher) callAgent(files []string) bool {
 	return true
 }
 
-func (d *Dispatcher) executeReplyActions(processingPaths []string) error {
-	for _, path := range processingPaths {
-		actionPath := filepath.Join(OutboxDir, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))+".reply.json")
+func (d *Dispatcher) ProcessOutbox() error {
+	d.outboxMu.Lock()
+	defer d.outboxMu.Unlock()
+
+	files, err := os.ReadDir(OutboxDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(f.Name(), ".reply.json") {
+			continue
+		}
+
+		actionPath := filepath.Join(OutboxDir, f.Name())
 		info, err := os.Stat(actionPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -214,7 +231,7 @@ func (d *Dispatcher) executeReplyActions(processingPaths []string) error {
 		if err := json.Unmarshal(body, &action); err != nil {
 			return fmt.Errorf("parse %s: %w", actionPath, err)
 		}
-		replyMessageID, err := d.executeReplyAction(action)
+		replyMessageID, err := d.executeReplyAction(actionPath, action)
 		if err != nil {
 			return fmt.Errorf("execute %s: %w", actionPath, err)
 		}
@@ -226,7 +243,7 @@ func (d *Dispatcher) executeReplyActions(processingPaths []string) error {
 	return nil
 }
 
-func (d *Dispatcher) executeReplyAction(action replyAction) (string, error) {
+func (d *Dispatcher) executeReplyAction(actionPath string, action replyAction) (string, error) {
 	if action.Type == "" {
 		return "", nil
 	}
@@ -253,7 +270,7 @@ func (d *Dispatcher) executeReplyAction(action replyAction) (string, error) {
 		Body(larkim.NewReplyMessageReqBodyBuilder().
 			MsgType("text").
 			Content(string(contentBytes)).
-			Uuid(buildReplyUUID(action.MessageID)).
+			Uuid(buildReplyUUID(actionPath, action)).
 			Build()).
 		Build())
 	if err != nil {
@@ -267,16 +284,18 @@ func (d *Dispatcher) executeReplyAction(action replyAction) (string, error) {
 	return derefString(resp.Data.MessageId), nil
 }
 
-func buildReplyUUID(messageID string) string {
-	return "reply-feishu-" + sanitizePathToken(messageID)
+func buildReplyUUID(actionPath string, action replyAction) string {
+	sum := sha1.Sum([]byte(actionPath + "\n" + action.MessageID + "\n" + action.Text))
+	return "rf-" + fmt.Sprintf("%x", sum[:8])
 }
 
 func buildProcessedReplyPath(actionPath, replyMessageID string) string {
 	base := strings.TrimSuffix(actionPath, ".json")
+	hashSuffix := buildReplyActionHash(actionPath)
 	if strings.TrimSpace(replyMessageID) == "" {
-		return base + ".processed.json"
+		return base + ".processed._" + hashSuffix + ".json"
 	}
-	return base + ".processed." + sanitizePathToken(replyMessageID) + ".json"
+	return base + ".processed." + sanitizePathToken(replyMessageID) + "_" + hashSuffix + ".json"
 }
 
 func sanitizePathToken(value string) string {
@@ -286,4 +305,9 @@ func sanitizePathToken(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func buildReplyActionHash(actionPath string) string {
+	sum := sha1.Sum([]byte(actionPath))
+	return fmt.Sprintf("%x", sum[:4])
 }

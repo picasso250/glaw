@@ -505,6 +505,27 @@ func dispatchLoop(dispatcher *gatewaypkg.Dispatcher, dispatchCh <-chan struct{},
 	}
 }
 
+func outboxLoop(dispatcher *gatewaypkg.Dispatcher, stopChan <-chan bool, skipDispatch bool) {
+	if skipDispatch {
+		return
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopChan:
+			fmt.Println("[outbox] Stopping...")
+			return
+		case <-ticker.C:
+			if err := dispatcher.ProcessOutbox(); err != nil {
+				log.Printf("[outbox] [!] %v", err)
+			}
+		}
+	}
+}
+
 func mailLoop(config Config, db *sql.DB, dispatchCh chan struct{}, stopChan <-chan bool) {
 	if err := gatewaypkg.EnsureRuntimeDirs(); err != nil {
 		log.Printf("[!] gateway init dirs error: %v", err)
@@ -631,6 +652,7 @@ func main() {
 	}
 
 	go dispatchLoop(dispatcher, dispatchCh, stopGateway, *skipDispatch)
+	go outboxLoop(dispatcher, stopGateway, *skipDispatch)
 	go mailLoop(config, db, dispatchCh, stopGateway)
 	if config.Feishu.Enable {
 		go func() {
