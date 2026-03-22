@@ -26,6 +26,7 @@ type ArchivedMessage struct {
 	Subject        string
 	MessageID      string
 	Date           time.Time
+	Mentions       []string
 	Body           string
 	Attachments    []string
 }
@@ -74,8 +75,13 @@ func BuildMessageArchiveContent(message ArchivedMessage) string {
 		}
 	}
 
+	mentionsLine := ""
+	if len(message.Mentions) > 0 {
+		mentionsLine = "\nMentions: " + strings.Join(message.Mentions, "; ")
+	}
+
 	return fmt.Sprintf(
-		"Source: %s\nSender: %s <%s>\nConversation: %s\nSubject: %s\nMessageID: %s\nDate: %s\n%s\n%s",
+		"Source: %s\nSender: %s <%s>\nConversation: %s\nSubject: %s\nMessageID: %s\nDate: %s%s\n%s\n%s",
 		message.Source,
 		message.SenderName,
 		message.SenderID,
@@ -83,6 +89,7 @@ func BuildMessageArchiveContent(message ArchivedMessage) string {
 		message.Subject,
 		message.MessageID,
 		message.Date.Format(time.RFC3339),
+		mentionsLine,
 		strings.Repeat("-", 50),
 		body,
 	)

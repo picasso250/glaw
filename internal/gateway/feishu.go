@@ -127,6 +127,7 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 		Subject:        chatType,
 		MessageID:      messageID,
 		Date:           msgTime,
+		Mentions:       formatFeishuMentions(message.Mentions),
 		Body:           body,
 	})
 
@@ -275,6 +276,36 @@ func shouldDispatchFeishuMessage(chatType string, mentions []*larkim.MentionEven
 		return false
 	}
 	return len(mentions) > 0
+}
+
+func formatFeishuMentions(mentions []*larkim.MentionEvent) []string {
+	var results []string
+	for _, mention := range mentions {
+		if mention == nil {
+			continue
+		}
+
+		parts := []string{}
+		if key := strings.TrimSpace(derefString(mention.Key)); key != "" {
+			parts = append(parts, key)
+		}
+		if name := strings.TrimSpace(derefString(mention.Name)); name != "" {
+			parts = append(parts, name)
+		}
+
+		openID := ""
+		if mention.Id != nil {
+			openID = strings.TrimSpace(derefString(mention.Id.OpenId))
+		}
+		if openID != "" {
+			parts = append(parts, "<"+openID+">")
+		}
+
+		if len(parts) > 0 {
+			results = append(results, strings.Join(parts, " "))
+		}
+	}
+	return results
 }
 
 func derefString(value *string) string {
