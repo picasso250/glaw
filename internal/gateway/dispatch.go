@@ -254,13 +254,13 @@ func buildBatchPrompt(source, absInit, fileList string) string {
 	case "feishu":
 		return fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理飞书消息: %s 。
 - 这些文件全部来自飞书。
-- 收到每条需要回复的飞书消息后，先只基于消息本体立刻给用户一个简短、让人安心的快速回复，不要等待上下文检索完成。
 - 使用 message-search 技能，基于当前消息文件路径查找上下文。
 - 群里没有被 @ 的飞书消息不会进入 pending，而是归档在 gateway/history/；为了补足群聊上下文，请额外查看其中最近写入的 5 条相关飞书消息文件。
 - 查清上下文、完成所有相关工作后，再给同一条飞书消息一条全面、精确、专业的最终回复。
+- 对已经回复过的消息，尽量不要再次重复回复；只有在内容确实非常重要、必须反复强调时，才再次说明。
 - 遵从消息中的指令。
 - 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
-- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.txt 的文件。快速回复和最终回复都用这个机制；快速回复先创建一次，最终回复稍后再创建一次。
+- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.txt 的文件。
 - reply 文件格式固定为两段：第一行写 reply_feishu:message_id=原消息MessageID；从第二行开始写回复正文原文，只允许输出一个飞书文本回复。
 - 如果本批次处理过飞书消息，那么在你确认当前所有工作都完成后，先立刻重新检查 gateway/pending/ 和 gateway/processing/ 中是否有新的飞书消息文件；同时也重新查看 gateway/history/ 中最近写入的 5 条相关群消息文件；如果有新的飞书消息或新的相关群聊上下文，并且和你相关，就继续处理这些新内容。
 - 如果这一轮即时检查没有发现新的相关内容，就使用 message-search 技能中的 wait60s_or_msg_comming.ps1，并运行 pwsh $HOME\.agents\skills\message-search\wait60s_or_msg_comming.ps1 -TimeoutSeconds 60 。这个脚本会在等待期间持续观察 gateway/history、gateway/pending、gateway/processing，只要出现新的飞书消息文件就立刻返回；如果一直没有新飞书消息，就在 60 秒后返回 timeout。
