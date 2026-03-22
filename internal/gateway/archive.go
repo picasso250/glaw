@@ -15,6 +15,7 @@ type ArchivedEmail struct {
 	Date       time.Time
 	Body       string
 	ImageFiles []string
+	Attachments []string
 }
 
 func EnsureRuntimeDirs() error {
@@ -32,6 +33,12 @@ func BuildEmailArchiveContent(email ArchivedEmail) string {
 		body += "\n\nImages:\n"
 		for _, img := range email.ImageFiles {
 			body += fmt.Sprintf("- %s/%s\n", MediaDir, img)
+		}
+	}
+	if len(email.Attachments) > 0 {
+		body += "\n\nAttachments:\n"
+		for _, attachment := range email.Attachments {
+			body += fmt.Sprintf("- %s/%s\n", MediaDir, attachment)
 		}
 	}
 

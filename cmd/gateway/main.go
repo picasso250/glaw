@@ -29,6 +29,55 @@ type Config struct {
 	AgentWrapPath  string
 }
 
+func filenameFromContentType(contentType string) string {
+	switch contentType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "application/pdf":
+		return ".pdf"
+	case "text/plain":
+		return ".txt"
+	case "text/html":
+		return ".html"
+	case "application/zip":
+		return ".zip"
+	default:
+		return ".bin"
+	}
+}
+
+func buildAttachmentFilename(contentType string, params map[string]string, filename string) string {
+	if filename == "" {
+		filename = params["name"]
+	}
+	if filename != "" {
+		filename = filepath.Base(filename)
+		return fmt.Sprintf("%d_%s", time.Now().UnixMilli(), filename)
+	}
+	return fmt.Sprintf("attachment_%d%s", time.Now().UnixNano(), filenameFromContentType(contentType))
+}
+
+func savePartToMediaDir(body io.Reader, contentType string, params map[string]string, filename string) (string, error) {
+	savedName := buildAttachmentFilename(contentType, params, filename)
+	filePath := filepath.Join(gatewaypkg.MediaDir, savedName)
+
+	f, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, body); err != nil {
+		return "", err
+	}
+
+	return savedName, nil
+}
+
 func parseFilterSenders(val string) []string {
 	var filters []string
 	for _, s := range strings.Split(val, ",") {
@@ -216,6 +265,7 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB) {
 
 			var body string
 			var imageFiles []string
+			var attachmentFiles []string
 			for {
 				p, err := mr.NextPart()
 				if err == io.EOF {
@@ -239,33 +289,30 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB) {
 					filename = dispParams["filename"]
 				}
 
+				isImage := strings.HasPrefix(contentType, "image/")
+				isAttachment := false
+				switch p.Header.(type) {
+				case *mail.AttachmentHeader:
+					isAttachment = true
+				}
+
 				if contentType == "text/plain" && body == "" {
 					b, _ := io.ReadAll(p.Body)
 					body = string(b)
-				} else if strings.HasPrefix(contentType, "image/") {
-					if filename == "" {
-						filename = params["name"]
-					}
-					if filename == "" {
-						ext := ".png"
-						if contentType == "image/jpeg" {
-							ext = ".jpg"
-						} else if contentType == "image/gif" {
-							ext = ".gif"
-						}
-						filename = fmt.Sprintf("image_%d%s", time.Now().UnixNano(), ext)
-					} else {
-						filename = filepath.Base(filename)
-						filename = fmt.Sprintf("%d_%s", time.Now().UnixMilli(), filename)
+				} else if isImage || isAttachment {
+					savedName, err := savePartToMediaDir(p.Body, contentType, params, filename)
+					if err != nil {
+						log.Printf("[check_mail] [!] Save attachment error: %v", err)
+						continue
 					}
 
-					filePath := filepath.Join(gatewaypkg.MediaDir, filename)
-					f, err := os.Create(filePath)
-					if err == nil {
-						io.Copy(f, p.Body)
-						f.Close()
-						imageFiles = append(imageFiles, filename)
-						fmt.Printf("    -> [check_mail] Saved Image: %s\n", filename)
+					if isImage {
+						imageFiles = append(imageFiles, savedName)
+						fmt.Printf("    -> [check_mail] Saved Image: %s\n", savedName)
+					}
+					if isAttachment && !isImage {
+						attachmentFiles = append(attachmentFiles, savedName)
+						fmt.Printf("    -> [check_mail] Saved Attachment: %s\n", savedName)
 					}
 				}
 			}
@@ -277,6 +324,7 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB) {
 				Date:       msg.Envelope.Date,
 				Body:       body,
 				ImageFiles: imageFiles,
+				Attachments: attachmentFiles,
 			})
 
 			archiveFile, err := gatewaypkg.SavePendingEmail(msg.Uid, emailAddr, archiveContent, time.Now())
