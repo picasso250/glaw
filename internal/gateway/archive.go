@@ -31,7 +31,7 @@ type ArchivedMessage struct {
 }
 
 func EnsureRuntimeDirs() error {
-	for _, dir := range []string{PendingDir, ProcessingDir, HistoryDir, MediaDir, OutboxDir} {
+	for _, dir := range []string{PendingDir, ProcessingDir, HistoryDir, MediaDir, OutboxDir, LogsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}

@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	larkdispatcher "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -25,6 +28,18 @@ type FeishuConfig struct {
 type feishuTextContent struct {
 	Text string `json:"text"`
 }
+
+type feishuPostContent struct {
+	Title   string                  `json:"title"`
+	Content [][][]feishuPostElement `json:"content"`
+}
+
+type feishuPostElement struct {
+	Tag  string `json:"tag"`
+	Text string `json:"text"`
+}
+
+var feishuEventLogMu sync.Mutex
 
 func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}) error {
 	if !config.Enable {
@@ -70,8 +85,20 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 		}
 	}
 
-	if messageType != "text" {
-		log.Printf("[feishu] [*] Ignoring non-text message %s of type %s", messageID, messageType)
+	appendFeishuEventLog(
+		"message_id=%s message_type=%s chat_type=%s chat_id=%s sender_type=%s sender_open_id=%s mentions=%d",
+		messageID,
+		messageType,
+		chatType,
+		chatID,
+		senderType,
+		senderOpenID,
+		len(message.Mentions),
+	)
+	appendFeishuEventRawLog(event)
+
+	if !isSupportedFeishuMessageType(messageType) {
+		log.Printf("[feishu] [*] Ignoring unsupported message %s of type %s", messageID, messageType)
 		return nil
 	}
 
@@ -86,7 +113,7 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 		return fmt.Errorf("lookup state for %s: %w", messageID, err)
 	}
 
-	body, err := extractFeishuText(derefString(message.Content))
+	body, err := extractFeishuMessageText(messageType, derefString(message.Content))
 	if err != nil {
 		return fmt.Errorf("parse message content for %s: %w", messageID, err)
 	}
@@ -133,12 +160,59 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 	return nil
 }
 
+func isSupportedFeishuMessageType(messageType string) bool {
+	switch strings.TrimSpace(messageType) {
+	case "text", "post":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractFeishuMessageText(messageType, raw string) (string, error) {
+	switch strings.TrimSpace(messageType) {
+	case "text":
+		return extractFeishuText(raw)
+	case "post":
+		return extractFeishuPostText(raw)
+	default:
+		return "", fmt.Errorf("unsupported message type %q", messageType)
+	}
+}
+
 func extractFeishuText(raw string) (string, error) {
 	var content feishuTextContent
 	if err := json.Unmarshal([]byte(raw), &content); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(content.Text), nil
+}
+
+func extractFeishuPostText(raw string) (string, error) {
+	var content feishuPostContent
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return "", err
+	}
+
+	var parts []string
+	if strings.TrimSpace(content.Title) != "" {
+		parts = append(parts, strings.TrimSpace(content.Title))
+	}
+	for _, localeBlocks := range content.Content {
+		for _, line := range localeBlocks {
+			var lineParts []string
+			for _, element := range line {
+				if element.Tag == "text" && strings.TrimSpace(element.Text) != "" {
+					lineParts = append(lineParts, strings.TrimSpace(element.Text))
+				}
+			}
+			if len(lineParts) > 0 {
+				parts = append(parts, strings.Join(lineParts, ""))
+			}
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(parts, "\n")), nil
 }
 
 func parseFeishuTime(values ...string) time.Time {
@@ -208,4 +282,55 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func appendFeishuEventLog(format string, args ...any) {
+	feishuEventLogMu.Lock()
+	defer feishuEventLogMu.Unlock()
+
+	if err := os.MkdirAll(LogsDir, 0755); err != nil {
+		log.Printf("[feishu] [!] create log dir failed: %v", err)
+		return
+	}
+
+	logPath := filepath.Join(LogsDir, "feishu_events.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[feishu] [!] open event log failed: %v", err)
+		return
+	}
+	defer f.Close()
+
+	line := fmt.Sprintf("%s [feishu] [event] %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	if _, err := f.WriteString(line); err != nil {
+		log.Printf("[feishu] [!] write event log failed: %v", err)
+	}
+}
+
+func appendFeishuEventRawLog(event *larkim.P2MessageReceiveV1) {
+	feishuEventLogMu.Lock()
+	defer feishuEventLogMu.Unlock()
+
+	if err := os.MkdirAll(LogsDir, 0755); err != nil {
+		log.Printf("[feishu] [!] create log dir failed: %v", err)
+		return
+	}
+
+	body, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("[feishu] [!] marshal raw event failed: %v", err)
+		return
+	}
+
+	logPath := filepath.Join(LogsDir, "feishu_events_raw.jsonl")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[feishu] [!] open raw event log failed: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(body, '\n')); err != nil {
+		log.Printf("[feishu] [!] write raw event log failed: %v", err)
+	}
 }

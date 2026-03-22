@@ -7,4 +7,5 @@ const (
 	MediaDir      = "gateway/media"
 	OutboxDir     = "gateway/outbox"
 	DBFile        = "gateway/message_state.db"
+	LogsDir       = "logs"
 )
