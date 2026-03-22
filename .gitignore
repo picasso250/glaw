@@ -10,3 +10,4 @@ gateway/history/*
 !gateway/history/.gitkeep
 *.db
 *.exe
+handover.md
