@@ -214,36 +214,38 @@ func (d *Dispatcher) executeReplyActions(processingPaths []string) error {
 		if err := json.Unmarshal(body, &action); err != nil {
 			return fmt.Errorf("parse %s: %w", actionPath, err)
 		}
-		if err := d.executeReplyAction(action); err != nil {
+		replyMessageID, err := d.executeReplyAction(action)
+		if err != nil {
 			return fmt.Errorf("execute %s: %w", actionPath, err)
 		}
-		if err := os.Remove(actionPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove %s: %w", actionPath, err)
+		processedPath := buildProcessedReplyPath(actionPath, replyMessageID)
+		if err := os.Rename(actionPath, processedPath); err != nil {
+			return fmt.Errorf("rename %s to %s: %w", actionPath, processedPath, err)
 		}
 	}
 	return nil
 }
 
-func (d *Dispatcher) executeReplyAction(action replyAction) error {
+func (d *Dispatcher) executeReplyAction(action replyAction) (string, error) {
 	if action.Type == "" {
-		return nil
+		return "", nil
 	}
 	if action.Type != "reply_feishu" {
-		return fmt.Errorf("unsupported action type %q", action.Type)
+		return "", fmt.Errorf("unsupported action type %q", action.Type)
 	}
 	if d.FeishuClient == nil {
-		return fmt.Errorf("feishu client is not configured")
+		return "", fmt.Errorf("feishu client is not configured")
 	}
 	if strings.TrimSpace(action.MessageID) == "" {
-		return fmt.Errorf("message_id is empty")
+		return "", fmt.Errorf("message_id is empty")
 	}
 	if strings.TrimSpace(action.Text) == "" {
-		return fmt.Errorf("reply text is empty")
+		return "", fmt.Errorf("reply text is empty")
 	}
 
 	contentBytes, err := json.Marshal(map[string]string{"text": action.Text})
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	resp, err := d.FeishuClient.Im.V1.Message.Reply(context.Background(), larkim.NewReplyMessageReqBuilder().
@@ -251,15 +253,37 @@ func (d *Dispatcher) executeReplyAction(action replyAction) error {
 		Body(larkim.NewReplyMessageReqBodyBuilder().
 			MsgType("text").
 			Content(string(contentBytes)).
+			Uuid(buildReplyUUID(action.MessageID)).
 			Build()).
 		Build())
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !resp.Success() {
-		return fmt.Errorf("code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("code=%d msg=%s", resp.Code, resp.Msg)
 	}
 
 	log.Printf("[dispatch] [*] Replied to Feishu message %s", action.MessageID)
-	return nil
+	return derefString(resp.Data.MessageId), nil
+}
+
+func buildReplyUUID(messageID string) string {
+	return "reply-feishu-" + sanitizePathToken(messageID)
+}
+
+func buildProcessedReplyPath(actionPath, replyMessageID string) string {
+	base := strings.TrimSuffix(actionPath, ".json")
+	if strings.TrimSpace(replyMessageID) == "" {
+		return base + ".processed.json"
+	}
+	return base + ".processed." + sanitizePathToken(replyMessageID) + ".json"
+}
+
+func sanitizePathToken(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.NewReplacer(":", "-", "/", "-", "\\", "-", " ", "_").Replace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }

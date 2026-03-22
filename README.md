@@ -41,11 +41,34 @@ Start:
 go run ./cmd/gateway
 ```
 
+Dev loop:
+
+```powershell
+.\dev.ps1
+```
+
 The process expects to be started from the repository root so it can access `gateway/` and `INIT.md`.
 
 ## Feishu Bot
 
-When `FEISHU_ENABLE=true`, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text events. Trusted messages are persisted into `gateway/pending/` and dispatched through the same processing pipeline as mail.
+When `FEISHU_ENABLE=true`, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text events.
+
+Current Feishu routing rules:
+
+- group plain text messages: archive only
+- group `@bot` text messages: archive and dispatch
+- p2p text messages: archive and dispatch
+
+Required Feishu setup:
+
+- enable the Bot ability for the app
+- subscribe the `im.message.receive_v1` event and publish the app version
+- grant `im:message:send_as_bot` so the gateway can reply as the bot
+- grant `im:message.group_msg` if you want to receive normal group messages, not only `@bot` mentions
+- grant the p2p message permission for bot chats if you want to receive all direct messages
+- `im:message:readonly` is useful for message read access, but it does not replace the bot send scope above
+
+If `im:message.group_msg` is missing, Feishu will typically only deliver group messages that explicitly mention the bot.
 
 ## Notes Before Open Source
 
