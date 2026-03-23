@@ -169,7 +169,7 @@ func (d *Dispatcher) callAgent(files []string) bool {
 		fmt.Printf("[dispatch] [!] Invalid AGENT_CMD: %v\n", err)
 		return false
 	}
-	commandParts = append(commandParts, "-p", prompt)
+	commandParts = append(commandParts, prompt)
 
 	cmd := exec.Command(commandParts[0], commandParts[1:]...)
 	cmd.Stdout = os.Stdout

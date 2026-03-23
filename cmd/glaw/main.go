@@ -108,27 +108,48 @@ func parseCSV(val string) []string {
 }
 
 func findEnvFiles() ([]string, error) {
-	home, err := os.UserHomeDir()
+	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(home) == "" {
-		return nil, fmt.Errorf("user home directory is empty")
-	}
 
-	homeEnv := filepath.Join(home, ".env")
-	info, err := os.Stat(homeEnv)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf(".env not found at %s", homeEnv)
+	var envFiles []string
+
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		homeEnv := filepath.Join(home, ".env")
+		info, statErr := os.Stat(homeEnv)
+		if statErr == nil && !info.IsDir() {
+			envFiles = append(envFiles, homeEnv)
 		}
-		return nil, err
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf(".env path is a directory: %s", homeEnv)
 	}
 
-	return []string{homeEnv}, nil
+	var localCandidates []string
+	dir := wd
+	for {
+		localCandidates = append(localCandidates, filepath.Join(dir, ".env"))
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	for i := len(localCandidates) - 1; i >= 0; i-- {
+		candidate := localCandidates[i]
+		if len(envFiles) > 0 && strings.EqualFold(envFiles[len(envFiles)-1], candidate) {
+			continue
+		}
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && !info.IsDir() {
+			envFiles = append(envFiles, candidate)
+		}
+	}
+
+	if len(envFiles) == 0 {
+		return nil, fmt.Errorf(".env not found in %s upward or at home directory", wd)
+	}
+
+	return envFiles, nil
 }
 
 func loadEnvValues() (map[string]string, error) {
@@ -152,6 +173,7 @@ func loadEnvValues() (map[string]string, error) {
 			}
 			parts := strings.SplitN(line, "=", 2)
 			key := strings.TrimSpace(parts[0])
+			key = strings.TrimPrefix(key, "\uFEFF")
 			val := strings.TrimSpace(parts[1])
 			values[key] = val
 		}
@@ -596,6 +618,7 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	skipDispatch := fs.Bool("skip-dispatch", false, "log queued message files instead of dispatching them")
+	agentCmd := fs.String("agent-cmd", "", "override AGENT_CMD from .env for this serve process")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -611,6 +634,9 @@ func runServe(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load .env: %w", err)
 	}
+	if strings.TrimSpace(*agentCmd) != "" {
+		config.AgentCmd = *agentCmd
+	}
 
 	db, err := gatewaypkg.InitDB()
 	if err != nil {
@@ -618,7 +644,6 @@ func runServe(args []string) error {
 	}
 	defer db.Close()
 
-	agentCmd := fs.String("agent-cmd", "", "override AGENT_CMD from .env for this serve process")
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -634,9 +659,6 @@ func runServe(args []string) error {
 	feishuEnabled := strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != ""
 	config.Feishu.Enable = feishuEnabled
 
-	if strings.TrimSpace(*agentCmd) != "" {
-		config.AgentCmd = *agentCmd
-	}
 	var feishuClient *lark.Client
 	if feishuEnabled {
 		feishuClient = lark.NewClient(config.Feishu.AppID, config.Feishu.AppSecret)

@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` and fill in:
 - `MAIL_PASS`: IMAP password or app password
 - `MAIL_IMAP_SERVER`: IMAP host, for example `imap.example.com`
 - `MAIL_FILTER_SENDER`: comma-separated trusted senders to process
-- `AGENT_CMD`: assistant command to execute, for example `gemini --yolo`; the gateway appends `-p <prompt>`
+- `AGENT_CMD`: assistant command prefix to execute; the gateway appends the prompt as the final argument. For example `gemini --yolo -p` or `node ...\\opencode -m zhipuai-coding-plan/glm-5 run`
 - `FEISHU_APP_ID`: Feishu app ID for the bot-enabled custom app
 - `FEISHU_APP_SECRET`: Feishu app secret for the bot-enabled custom app
 - `FEISHU_ALLOWED_OPEN_IDS`: comma-separated trusted Feishu sender `open_id` values
