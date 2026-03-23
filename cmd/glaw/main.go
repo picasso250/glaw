@@ -206,9 +206,6 @@ func loadEnv() (Config, error) {
 	if val, ok := values["AGENT_CMD"]; ok {
 		config.AgentCmd = val
 	}
-	if val, ok := values["FEISHU_ENABLE"]; ok {
-		config.Feishu.Enable = strings.EqualFold(val, "true") || val == "1"
-	}
 	if val, ok := values["FEISHU_APP_ID"]; ok {
 		config.Feishu.AppID = val
 	}
@@ -650,8 +647,10 @@ func runServe(args []string) error {
 		fmt.Println(">>> Gateway starting (check-mail + dispatch)...")
 	}
 
+	feishuEnabled := strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != ""
+
 	var feishuClient *lark.Client
-	if config.Feishu.Enable && strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != "" {
+	if feishuEnabled {
 		feishuClient = lark.NewClient(config.Feishu.AppID, config.Feishu.AppSecret)
 	}
 
@@ -666,7 +665,7 @@ func runServe(args []string) error {
 	go dispatchLoop(dispatcher, dispatchCh, stopGateway, *skipDispatch)
 	go outboxLoop(dispatcher, stopGateway, *skipDispatch)
 	go mailLoop(config, db, dispatchCh, stopGateway)
-	if config.Feishu.Enable {
+	if feishuEnabled {
 		go func() {
 			if err := gatewaypkg.StartFeishuLongConn(config.Feishu, db, dispatchCh); err != nil {
 				log.Printf("[feishu] [!] Long connection stopped: %v", err)

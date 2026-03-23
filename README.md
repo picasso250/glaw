@@ -21,7 +21,6 @@ Copy `.env.example` to `.env` and fill in:
 - `MAIL_IMAP_SERVER`: IMAP host, for example `imap.example.com`
 - `MAIL_FILTER_SENDER`: comma-separated trusted senders to process
 - `AGENT_CMD`: assistant command to execute, for example `gemini --yolo`; the gateway appends `-p <prompt>`
-- `FEISHU_ENABLE`: set to `true` to enable the Feishu long-connection bot client
 - `FEISHU_APP_ID`: Feishu app ID for the bot-enabled custom app
 - `FEISHU_APP_SECRET`: Feishu app secret for the bot-enabled custom app
 - `FEISHU_ALLOWED_OPEN_IDS`: comma-separated trusted Feishu sender `open_id` values
@@ -63,7 +62,7 @@ The process expects to be started from the repository root so it can access `gat
 
 ## Feishu Bot
 
-When `FEISHU_ENABLE=true`, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text events.
+When both `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are non-empty, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text events.
 
 Current Feishu routing rules:
 
