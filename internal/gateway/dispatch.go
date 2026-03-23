@@ -263,9 +263,7 @@ func buildBatchPrompt(source, absInit, fileList string) string {
 - 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.txt 的文件。
 - reply 文件格式固定为两段：第一行写 reply_feishu:message_id=原消息MessageID；从第二行开始写回复正文原文，只允许输出一个飞书文本回复。
 - 如果本批次处理过飞书消息，那么在你确认当前所有工作都完成后，先立刻重新检查 gateway/pending/ 和 gateway/processing/ 中是否有新的飞书消息文件；同时再次运行绝对路径命令 pwsh -Command "Set-Location 'C:\Users\MECHREV\glaw'; go run .\cmd\feishu-list-messages -chat-id <当前消息里的 Conversation/chat_id> -page-size 20 -minutes 3" ，只拉最近 3 分钟的群消息；如果有新的飞书消息或新的相关群聊上下文，并且和你相关，就继续处理这些新内容。
-- 如果这一轮即时检查没有发现新的相关内容，就直接等待 60 秒，然后再次运行刚才这条带 -minutes 3 的绝对路径 go run 命令，重新拉取最近 3 分钟的群消息，再判断是否有新的相关内容。
-- 维护两个连续计数：连续“没收到新消息”计数，以及连续“收到的新消息都和你无关”计数。每次等待 60 秒后重新拉取仍然没有新消息，就把“没收到新消息”计数加一；每次检查到新消息但判断都和你无关，就把“无关消息”计数加一；只要发现了和你相关的新内容并继续处理，就把两个计数都清零。
-- 当连续 3 次没收到新消息，或者连续 3 次检查到的新消息都和你无关时，才最终停止这个飞书尾随循环。
+- 如果这一轮即时检查没有发现新的相关内容，就直接等待 60 秒，然后再次运行刚才这条带 -minutes 3 的绝对路径 go run 命令，重新拉取最近 3 分钟的群消息，再判断是否有新的相关内容；如果仍然没有新的内容，或者有新内容但和你无关，就结束本次任务。
 `, absInit, fileList)
 	default:
 		return fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理消息: %s 。
