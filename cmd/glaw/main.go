@@ -631,6 +631,7 @@ func runServe(args []string) error {
 	}
 
 	feishuEnabled := strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != ""
+	config.Feishu.Enable = feishuEnabled
 
 	var feishuClient *lark.Client
 	if feishuEnabled {
