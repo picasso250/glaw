@@ -1,10 +1,10 @@
-# g-claw
+# glaw
 
 Minimal open-source starting point for a mail-driven assistant gateway.
 
 ## What it does
 
-`g-claw` polls an IMAP inbox or accepts Feishu bot messages over a long connection, archives matched content into `gateway/pending/`, and dispatches those files to an external assistant command.
+`glaw` polls an IMAP inbox or accepts Feishu bot messages over a long connection, archives matched content into `gateway/pending/`, and dispatches those files to an external assistant command.
 
 The current implementation is intentionally small:
 
@@ -75,3 +75,11 @@ If `im:message.group_msg` is missing, Feishu will typically only deliver group m
 - Replace the module path in `go.mod` with the final repository path.
 - Review the prompt text in `cmd/gateway/main.go` for product-specific policy.
 - The assistant command contract is still local and opinionated by design; if you want broader reuse, the next step is to abstract the assistant runner interface.
+
+## Feishu Context Lessons
+
+- Pulling extra Feishu group context inside the gateway is architecturally cleaner than asking the agent to run ad hoc shell commands, but it has an important tradeoff in the current runner model.
+- Today the gateway launches the assistant through `AGENT_CMD` as a fresh CLI process each time. If the gateway performs a follow-up check and finds new context, the only available way to continue is to start a brand new assistant process again.
+- In practice this is slow for heavy CLI runners such as Gemini CLI, because process startup itself can take around 20 seconds.
+- It also means follow-up handling cannot reuse the previous assistant process memory or in-session reasoning state; it can only reconstruct context from files and prompt text.
+- Because of that, keeping Feishu follow-up checks inside prompt instructions is currently simpler than moving them fully into gateway-triggered re-entry. A better long-term fix would be a persistent assistant session, a resumable runner protocol, or a local service API instead of one-shot CLI launches.
