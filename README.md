@@ -8,7 +8,7 @@ Minimal open-source starting point for a mail-driven assistant gateway.
 
 The current implementation is intentionally small:
 
-- `cmd/gateway/main.go`: gateway entrypoint
+- `cmd/glaw/main.go`: unified CLI entrypoint
 - `INIT.md`: initialization prompt file consumed by the assistant command
 - `.env.example`: local configuration template
 
@@ -38,7 +38,19 @@ go build ./...
 Start:
 
 ```powershell
-go run ./cmd/gateway
+go run ./cmd/glaw serve
+```
+
+Build a local executable:
+
+```powershell
+go build -o ~/bin/glaw.exe ./cmd/glaw
+```
+
+Then run it:
+
+```powershell
+~/bin/glaw.exe serve
 ```
 
 Dev loop:
@@ -73,8 +85,16 @@ If `im:message.group_msg` is missing, Feishu will typically only deliver group m
 ## Notes Before Open Source
 
 - Replace the module path in `go.mod` with the final repository path.
-- Review the prompt text in `cmd/gateway/main.go` for product-specific policy.
+- Review the prompt text in `internal/gateway/dispatch.go` for product-specific policy.
 - The assistant command contract is still local and opinionated by design; if you want broader reuse, the next step is to abstract the assistant runner interface.
+
+## Feishu Helper CLI
+
+Use the built binary for ad hoc Feishu history pulls:
+
+```powershell
+~/bin/glaw.exe feishu list-messages -chat-id <chat_id> -page-size 20 -minutes 180
+```
 
 ## Feishu Context Lessons
 

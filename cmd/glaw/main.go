@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -20,8 +21,9 @@ import (
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message/mail"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
-	gatewaypkg "g-claw/internal/gateway"
+	gatewaypkg "glaw/internal/gateway"
 )
 
 type Config struct {
@@ -125,14 +127,7 @@ func findEnvFiles() ([]string, error) {
 
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		homeEnv := filepath.Join(home, ".env")
-		alreadyAdded := false
-		for _, candidate := range candidates {
-			if candidate == homeEnv {
-				alreadyAdded = true
-				break
-			}
-		}
-		if !alreadyAdded {
+		if !slices.Contains(candidates, homeEnv) {
 			candidates = append(candidates, homeEnv)
 		}
 	}
@@ -309,8 +304,6 @@ func connectMail(config Config) (*client.Client, error) {
 
 	return c, nil
 }
-
-// --- Check Mail Logic ---
 
 func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatchCh chan struct{}) error {
 	if err := os.MkdirAll(gatewaypkg.PendingDir, 0755); err != nil {
@@ -619,22 +612,29 @@ func mailLoop(config Config, db *sql.DB, dispatchCh chan struct{}, stopChan <-ch
 	}
 }
 
-func main() {
-	skipDispatch := flag.Bool("skip-dispatch", false, "log queued message files instead of dispatching them")
-	flag.Parse()
+func runServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	skipDispatch := fs.Bool("skip-dispatch", false, "log queued message files instead of dispatching them")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments for serve: %s", strings.Join(fs.Args(), " "))
+	}
 
 	if info, err := os.Stat("gateway"); err != nil || !info.IsDir() {
-		log.Fatal("Current working directory must be g-claw root: missing gateway/")
+		return fmt.Errorf("current working directory must be glaw root: missing gateway/")
 	}
 
 	config, err := loadEnv()
 	if err != nil {
-		log.Fatalf("Error loading .env: %v", err)
+		return fmt.Errorf("load .env: %w", err)
 	}
 
 	db, err := gatewaypkg.InitDB()
 	if err != nil {
-		log.Fatalf("Error initializing DB: %v", err)
+		return fmt.Errorf("init db: %w", err)
 	}
 	defer db.Close()
 
@@ -678,4 +678,159 @@ func main() {
 	fmt.Println("\n[*] Shutting down...")
 	close(stopGateway)
 	time.Sleep(1 * time.Second)
+	return nil
+}
+
+func runFeishuListMessages(args []string) error {
+	fs := flag.NewFlagSet("feishu list-messages", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	chatID := fs.String("chat-id", "", "Feishu chat_id, e.g. oc_xxx")
+	pageSize := fs.Int("page-size", 20, "number of messages to fetch")
+	minutes := fs.Int("minutes", 120, "look back this many minutes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments for feishu list-messages: %s", strings.Join(fs.Args(), " "))
+	}
+	if strings.TrimSpace(*chatID) == "" {
+		return fmt.Errorf("missing -chat-id")
+	}
+
+	cfg, err := loadEnv()
+	if err != nil {
+		return fmt.Errorf("load .env: %w", err)
+	}
+	if strings.TrimSpace(cfg.Feishu.AppID) == "" || strings.TrimSpace(cfg.Feishu.AppSecret) == "" {
+		return fmt.Errorf("FEISHU_APP_ID or FEISHU_APP_SECRET is empty")
+	}
+
+	client := lark.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret)
+	endTime := time.Now().Unix()
+	startTime := time.Now().Add(-time.Duration(*minutes) * time.Minute).Unix()
+
+	req := larkim.NewListMessageReqBuilder().
+		ContainerIdType("chat").
+		ContainerId(*chatID).
+		StartTime(fmt.Sprintf("%d", startTime)).
+		EndTime(fmt.Sprintf("%d", endTime)).
+		SortType(larkim.SortTypeListMessageByCreateTimeDesc).
+		PageSize(*pageSize).
+		Build()
+
+	resp, err := client.Im.V1.Message.List(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("list messages: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("list messages failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 {
+		fmt.Println("no messages")
+		return nil
+	}
+
+	for i, item := range resp.Data.Items {
+		fmt.Printf("[%d] message_id=%s sender_type=%s sender_id_type=%s sender_id=%s msg_type=%s create_time=%s chat_id=%s\n",
+			i,
+			deref(item.MessageId),
+			derefSenderType(item.Sender),
+			derefSenderIDType(item.Sender),
+			derefSenderID(item.Sender),
+			deref(item.MsgType),
+			formatMillis(deref(item.CreateTime)),
+			deref(item.ChatId),
+		)
+		if item.Body != nil && item.Body.Content != nil {
+			fmt.Printf("content=%s\n", deref(item.Body.Content))
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+func formatMillis(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var millis int64
+	if _, err := fmt.Sscanf(raw, "%d", &millis); err != nil {
+		return raw
+	}
+	return time.UnixMilli(millis).Format(time.RFC3339)
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func derefSenderType(sender *larkim.Sender) string {
+	if sender == nil {
+		return ""
+	}
+	return deref(sender.SenderType)
+}
+
+func derefSenderIDType(sender *larkim.Sender) string {
+	if sender == nil {
+		return ""
+	}
+	return deref(sender.IdType)
+}
+
+func derefSenderID(sender *larkim.Sender) string {
+	if sender == nil {
+		return ""
+	}
+	return deref(sender.Id)
+}
+
+func runFeishu(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing feishu subcommand")
+	}
+
+	switch args[0] {
+	case "list-messages":
+		return runFeishuListMessages(args[1:])
+	default:
+		return fmt.Errorf("unknown feishu subcommand %q", args[0])
+	}
+}
+
+func usage() string {
+	return strings.TrimSpace(`Usage:
+  glaw serve [--skip-dispatch]
+  glaw feishu list-messages -chat-id <chat_id> [-page-size 20] [-minutes 120]`)
+}
+
+func main() {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usage())
+		os.Exit(2)
+	}
+
+	var err error
+	switch args[0] {
+	case "serve":
+		err = runServe(args[1:])
+	case "feishu":
+		err = runFeishu(args[1:])
+	case "-h", "--help", "help":
+		fmt.Println(usage())
+		return
+	default:
+		err = fmt.Errorf("unknown command %q", args[0])
+	}
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

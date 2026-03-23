@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
-$ShortcutPath = Join-Path $DesktopPath "Gemini in g-claw.lnk"
-$WorkingDirectory = Join-Path $HOME "g-claw"
+$ShortcutPath = Join-Path $DesktopPath "Gemini in glaw.lnk"
+$WorkingDirectory = Join-Path $HOME "glaw"
 $WindowsTerminal = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\wt.exe"
 $GeminiPrompt = ' read INIT.md and do as he say '
 

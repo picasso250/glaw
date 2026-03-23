@@ -1,4 +1,4 @@
-module g-claw
+module glaw
 
 go 1.25.6
 
