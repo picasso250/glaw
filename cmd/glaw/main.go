@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -109,43 +108,27 @@ func parseCSV(val string) []string {
 }
 
 func findEnvFiles() ([]string, error) {
-	wd, err := os.Getwd()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(home) == "" {
+		return nil, fmt.Errorf("user home directory is empty")
+	}
 
-	candidates := []string{}
-	dir := wd
-	for {
-		candidates = append(candidates, filepath.Join(dir, ".env"))
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
+	homeEnv := filepath.Join(home, ".env")
+	info, err := os.Stat(homeEnv)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf(".env not found at %s", homeEnv)
 		}
-		dir = parent
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf(".env path is a directory: %s", homeEnv)
 	}
 
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		homeEnv := filepath.Join(home, ".env")
-		if !slices.Contains(candidates, homeEnv) {
-			candidates = append(candidates, homeEnv)
-		}
-	}
-
-	var envFiles []string
-	for _, candidate := range candidates {
-		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() {
-			envFiles = append(envFiles, candidate)
-		}
-	}
-
-	if len(envFiles) == 0 {
-		return nil, fmt.Errorf(".env not found from %s upward or in home directory", wd)
-	}
-
-	slices.Reverse(envFiles)
-	return envFiles, nil
+	return []string{homeEnv}, nil
 }
 
 func loadEnvValues() (map[string]string, error) {
