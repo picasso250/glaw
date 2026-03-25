@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -713,6 +714,9 @@ func runFeishuListMessages(args []string) error {
 	if strings.TrimSpace(cfg.Feishu.AppID) == "" || strings.TrimSpace(cfg.Feishu.AppSecret) == "" {
 		return fmt.Errorf("FEISHU_APP_ID or FEISHU_APP_SECRET is empty")
 	}
+	if err := gatewaypkg.EnsureRuntimeDirs(); err != nil {
+		return fmt.Errorf("ensure runtime dirs: %w", err)
+	}
 
 	client := lark.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret)
 	endTime := time.Now().Unix()
@@ -739,8 +743,9 @@ func runFeishuListMessages(args []string) error {
 		return nil
 	}
 
+	var output strings.Builder
 	for i, item := range resp.Data.Items {
-		fmt.Printf("[%d] message_id=%s sender_type=%s sender_id_type=%s sender_id=%s msg_type=%s create_time=%s chat_id=%s\n",
+		fmt.Fprintf(&output, "[%d] message_id=%s sender_type=%s sender_id_type=%s sender_id=%s msg_type=%s create_time=%s chat_id=%s\n",
 			i,
 			deref(item.MessageId),
 			derefSenderType(item.Sender),
@@ -751,11 +756,104 @@ func runFeishuListMessages(args []string) error {
 			deref(item.ChatId),
 		)
 		if item.Body != nil && item.Body.Content != nil {
-			fmt.Printf("content=%s\n", deref(item.Body.Content))
+			fmt.Fprintf(&output, "content=%s\n", deref(item.Body.Content))
 		}
-		fmt.Println()
+		output.WriteString("\n")
+	}
+	text := output.String()
+	fmt.Print(text)
+
+	savedPath, err := saveFeishuListMessagesSnapshot(text)
+	if err != nil {
+		return fmt.Errorf("save feishu history snapshot: %w", err)
+	}
+	fmt.Printf("also saved to %s, you can `rg` it later if you want.\n", filepath.ToSlash(savedPath))
+
+	return nil
+}
+
+func saveFeishuListMessagesSnapshot(content string) (string, error) {
+	dir := filepath.Join(gatewaypkg.HistoryDir, "feishu")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	sum := fmt.Sprintf("%x", md5.Sum([]byte(content)))
+	path := filepath.Join(dir, sum[:6]+".txt")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func newFeishuClientFromEnv() (*lark.Client, error) {
+	cfg, err := loadEnv()
+	if err != nil {
+		return nil, fmt.Errorf("load .env: %w", err)
+	}
+	if strings.TrimSpace(cfg.Feishu.AppID) == "" || strings.TrimSpace(cfg.Feishu.AppSecret) == "" {
+		return nil, fmt.Errorf("FEISHU_APP_ID or FEISHU_APP_SECRET is empty")
+	}
+	return lark.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret), nil
+}
+
+func runFeishuSend(args []string) error {
+	fs := flag.NewFlagSet("feishu send", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	messageID := fs.String("message-id", "", "Feishu message_id to reply to")
+	text := fs.String("text", "", "short text reply")
+	image := fs.String("image", "", "local image path to reply with")
+	file := fs.String("file", "", "local file path to reply with")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments for feishu send: %s", strings.Join(fs.Args(), " "))
+	}
+	if strings.TrimSpace(*messageID) == "" {
+		return fmt.Errorf("missing -message-id")
 	}
 
+	type providedPayload struct {
+		actionType string
+		payload    string
+		label      string
+	}
+
+	var provided []providedPayload
+	if strings.TrimSpace(*text) != "" {
+		provided = append(provided, providedPayload{actionType: "reply_feishu", payload: *text, label: "text"})
+	}
+	if strings.TrimSpace(*image) != "" {
+		provided = append(provided, providedPayload{actionType: "reply_feishu_image", payload: *image, label: "image"})
+	}
+	if strings.TrimSpace(*file) != "" {
+		provided = append(provided, providedPayload{actionType: "reply_feishu_file", payload: *file, label: "file"})
+	}
+	if len(provided) == 0 {
+		return fmt.Errorf("one of -text, -image, -file is required")
+	}
+	if len(provided) > 1 {
+		return fmt.Errorf("only one of -text, -image, -file may be used at a time")
+	}
+
+	client, err := newFeishuClientFromEnv()
+	if err != nil {
+		return err
+	}
+	if err := gatewaypkg.EnsureRuntimeDirs(); err != nil {
+		return fmt.Errorf("init gateway dirs: %w", err)
+	}
+
+	payload := provided[0]
+	dispatcher := &gatewaypkg.Dispatcher{FeishuClient: client}
+	replyMessageID, savedPath, err := dispatcher.SubmitReply(payload.actionType, *messageID, payload.payload)
+	if err != nil {
+		return fmt.Errorf("send %s reply to Feishu message %s: %w", payload.label, strings.TrimSpace(*messageID), err)
+	}
+
+	fmt.Printf("sent %s reply to message %s\n", payload.label, strings.TrimSpace(*messageID))
+	fmt.Printf("reply_message_id=%s\n", replyMessageID)
+	fmt.Printf("saved=%s\n", savedPath)
 	return nil
 }
 
@@ -807,6 +905,8 @@ func runFeishu(args []string) error {
 	switch args[0] {
 	case "list-messages":
 		return runFeishuListMessages(args[1:])
+	case "send":
+		return runFeishuSend(args[1:])
 	default:
 		return fmt.Errorf("unknown feishu subcommand %q", args[0])
 	}
@@ -815,7 +915,8 @@ func runFeishu(args []string) error {
 func usage() string {
 	return strings.TrimSpace(`Usage:
   glaw serve [--skip-dispatch] [--agent-cmd <command-prefix>]
-  glaw feishu list-messages -chat-id <chat_id> [-page-size 20] [-minutes 120]`)
+  glaw feishu list-messages -chat-id <chat_id> [-page-size 20] [-minutes 120]
+  glaw feishu send -message-id <message_id> (-text <text> | -image <path> | -file <path>)`)
 }
 
 func main() {

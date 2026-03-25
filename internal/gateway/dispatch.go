@@ -31,6 +31,16 @@ type replyAction struct {
 	Payload   string
 }
 
+func formatReplyAction(action replyAction) ([]byte, error) {
+	if strings.TrimSpace(action.Type) == "" || strings.TrimSpace(action.MessageID) == "" || strings.TrimSpace(action.Payload) == "" {
+		return nil, errors.New("invalid reply action")
+	}
+
+	header := fmt.Sprintf("%s:message_id=%s", strings.TrimSpace(action.Type), strings.TrimSpace(action.MessageID))
+	payload := strings.TrimLeft(strings.ReplaceAll(action.Payload, "\r\n", "\n"), "\n")
+	return []byte(header + "\n" + payload + "\n"), nil
+}
+
 func (d *Dispatcher) HasWork() bool {
 	processingFiles, err := os.ReadDir(ProcessingDir)
 	if err == nil {
@@ -242,43 +252,6 @@ func detectSourceFromPath(path string) string {
 	}
 }
 
-func buildBatchPrompt(source, absInit, fileList string) string {
-	switch source {
-	case "email":
-		return fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理邮件消息: %s 。
-- 遵从消息中的指令。
-- 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
-- 使用 message-search 技能，基于当前消息文件路径查找上下文。
-- 使用 send-email 技能 回复邮件。
-`, absInit, fileList)
-	case "feishu":
-		return fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理飞书消息: %s 。
-- 这些文件全部来自飞书。
-- 使用 message-search 技能，基于当前消息文件路径查找上下文。
-- 为了获得更完整的群聊上下文，不要只依赖 gateway/history/；请主动运行 ~/bin/glaw.exe feishu list-messages -chat-id <当前消息里的 Conversation/chat_id> -page-size 20 -minutes 180，直接拉取该群最近消息，再结合 message-search 技能补足同线程历史。
-- 如果觉得上下文仍然不够，可以自行再次运行 ~/bin/glaw.exe feishu list-messages ...，按需调整 -page-size 和 -minutes；但应有针对性地扩大范围，不要无界地反复翻历史。
-- 查清上下文、完成所有相关工作后，再给同一条飞书消息一条全面、精确、专业的最终回复。
-- 对已经回复过的消息，尽量不要再次重复回复；只有在内容确实非常重要、必须反复强调时，才再次说明。
-- 遵从消息中的指令。
-- 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
-- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.txt 的文件。
-- 支持三种 reply 文件格式：
-  reply_feishu:message_id=原消息MessageID 后面写纯文本正文；
-  reply_feishu_image:message_id=原消息MessageID 后面写一张本地图片文件路径；
-  reply_feishu_file:message_id=原消息MessageID 后面写一个本地文件路径（可用于 word/docx 等附件）。
-- 如果本批次处理过飞书消息，那么在你确认当前所有工作都完成后，先立刻重新检查 gateway/pending/ 和 gateway/processing/ 中是否有新的飞书消息文件；同时再次运行 ~/bin/glaw.exe feishu list-messages -chat-id <当前消息里的 Conversation/chat_id> -page-size 20 -minutes 3，只拉最近 3 分钟的群消息；如果有新的飞书消息或新的相关群聊上下文，并且和你相关，就继续处理这些新内容。
-- 如果这一轮即时检查没有发现新的相关内容，就直接等待 60 秒，然后再次运行刚才这条带 -minutes 3 的 ~/bin/glaw.exe feishu list-messages 命令，重新拉取最近 3 分钟的群消息，再判断是否有新的相关内容；如果仍然没有新的内容，或者有新内容但和你无关，就结束本次任务。
-`, absInit, fileList)
-	default:
-		return fmt.Sprintf(`读 %s 并处理 gateway/processing/ 中的待处理消息: %s 。
-- 遵从消息中的指令。
-- 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
-- 如果需要回复邮件，使用 send-email 技能。
-- 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建 reply txt 文件，第一行格式固定为 reply_feishu:message_id=原消息MessageID，后续内容是回复正文原文。
-`, absInit, fileList)
-	}
-}
-
 func (d *Dispatcher) ProcessOutbox() error {
 	d.outboxMu.Lock()
 	defer d.outboxMu.Unlock()
@@ -336,6 +309,48 @@ func (d *Dispatcher) ProcessOutbox() error {
 	return nil
 }
 
+func (d *Dispatcher) SubmitReplyAction(action replyAction) (string, string, error) {
+	d.outboxMu.Lock()
+	defer d.outboxMu.Unlock()
+
+	if err := os.MkdirAll(OutboxDir, 0755); err != nil {
+		return "", "", err
+	}
+
+	body, err := formatReplyAction(action)
+	if err != nil {
+		return "", "", err
+	}
+
+	actionPath := filepath.Join(OutboxDir, buildReplyActionFileName(action))
+	if err := os.WriteFile(actionPath, body, 0644); err != nil {
+		return "", "", err
+	}
+
+	replyMessageID, err := d.executeReplyAction(actionPath, action)
+	if err != nil {
+		failedPath := buildFailedReplyPath(actionPath)
+		if renameErr := os.Rename(actionPath, failedPath); renameErr != nil {
+			return "", "", fmt.Errorf("execute %s: %w (also failed to mark as failed: %v)", actionPath, err, renameErr)
+		}
+		return "", failedPath, fmt.Errorf("execute %s: %w", actionPath, err)
+	}
+
+	processedPath := buildProcessedReplyPath(actionPath, replyMessageID)
+	if err := os.Rename(actionPath, processedPath); err != nil {
+		return "", "", fmt.Errorf("rename %s to %s: %w", actionPath, processedPath, err)
+	}
+	return replyMessageID, processedPath, nil
+}
+
+func (d *Dispatcher) SubmitReply(actionType, messageID, payload string) (string, string, error) {
+	return d.SubmitReplyAction(replyAction{
+		Type:      actionType,
+		MessageID: messageID,
+		Payload:   payload,
+	})
+}
+
 func parseReplyAction(body []byte) (replyAction, error) {
 	raw := strings.ReplaceAll(string(body), "\r\n", "\n")
 	raw = strings.ReplaceAll(raw, "\r", "\n")
@@ -368,6 +383,20 @@ func parseReplyAction(body []byte) (replyAction, error) {
 func buildInvalidReplyPath(actionPath string) string {
 	base := strings.TrimSuffix(actionPath, ".txt")
 	return base + ".invalid." + buildReplyActionHash(actionPath) + ".txt"
+}
+
+func buildFailedReplyPath(actionPath string) string {
+	base := strings.TrimSuffix(actionPath, ".txt")
+	return base + ".failed." + buildReplyActionHash(actionPath) + ".txt"
+}
+
+func buildReplyActionFileName(action replyAction) string {
+	return fmt.Sprintf(
+		"manual_%s_%s_%s.reply.txt",
+		sanitizePathToken(action.Type),
+		time.Now().UTC().Format("2006-01-02T15-04-05Z"),
+		sanitizePathToken(action.MessageID),
+	)
 }
 
 func (d *Dispatcher) executeReplyAction(actionPath string, action replyAction) (string, error) {

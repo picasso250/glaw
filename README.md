@@ -97,7 +97,7 @@ Required Feishu setup:
 - grant `im:message.group_msg` if you want to receive normal group messages, not only `@bot` mentions
 - grant the p2p message permission for bot chats if you want to receive all direct messages
 - `im:message:readonly` is useful for message read access, but it does not replace the bot send scope above
-- if you want the gateway to download user-sent images and files from messages, also grant the message resource read permission required by the Feishu `message_resource.get` API
+- if you want the gateway to download user-sent images and files from messages, also grant `im:resource`; that is the message resource read permission used by the Feishu `message_resource.get` API
 
 If `im:message.group_msg` is missing, Feishu will typically only deliver group messages that explicitly mention the bot.
 
@@ -115,9 +115,19 @@ Use the built binary for ad hoc Feishu history pulls:
 ~/bin/glaw.exe feishu list-messages -chat-id <chat_id> -page-size 20 -minutes 180
 ```
 
+Send a Feishu reply directly and get immediate success or failure feedback:
+
+```powershell
+~/bin/glaw.exe feishu send -message-id <message_id> -text "收到，我去处理"
+~/bin/glaw.exe feishu send -message-id <message_id> -image .\answer.png
+~/bin/glaw.exe feishu send -message-id <message_id> -file .\answer.docx
+```
+
+The command writes the corresponding reply record into `gateway/outbox/` for audit, executes it immediately, and prints whether the send succeeded.
+
 ## Feishu Outbox Reply Format
 
-For Feishu replies, create a `.reply.txt` file in `gateway/outbox/`:
+The old `.reply.txt` format still works for background processing:
 
 - text reply: first line `reply_feishu:message_id=<message_id>`, remaining content is the text body
 - image reply: first line `reply_feishu_image:message_id=<message_id>`, remaining content is one local image path
