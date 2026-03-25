@@ -25,6 +25,11 @@ type Dispatcher struct {
 	outboxMu     sync.Mutex
 }
 
+type DispatchRequest struct {
+	Type    string
+	Message string
+}
+
 type replyAction struct {
 	Type      string
 	MessageID string
@@ -41,132 +46,65 @@ func formatReplyAction(action replyAction) ([]byte, error) {
 	return []byte(header + "\n" + payload + "\n"), nil
 }
 
-func (d *Dispatcher) HasWork() bool {
-	processingFiles, err := os.ReadDir(ProcessingDir)
-	if err == nil {
-		for _, f := range processingFiles {
-			if !f.IsDir() && !strings.HasSuffix(f.Name(), ".tmp") {
-				return true
-			}
-		}
-	}
-
-	pendingFiles, err := os.ReadDir(PendingDir)
-	if err == nil {
-		for _, f := range pendingFiles {
-			if !f.IsDir() && !strings.HasSuffix(f.Name(), ".tmp") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func (d *Dispatcher) Dispatch() bool {
+func (d *Dispatcher) DispatchBatch(requests []DispatchRequest) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	processingPaths, err := d.collectProcessingFiles()
-	if err != nil {
-		log.Printf("[dispatch] [!] Error reading processing dir: %v", err)
+	var emailPaths []string
+	var feishuMessages []string
+	for _, req := range requests {
+		switch strings.TrimSpace(req.Type) {
+		case "email":
+			if strings.TrimSpace(req.Message) != "" {
+				emailPaths = append(emailPaths, strings.TrimSpace(req.Message))
+			}
+		case "feishu":
+			if strings.TrimSpace(req.Message) != "" {
+				feishuMessages = append(feishuMessages, req.Message)
+			}
+		default:
+			log.Printf("[dispatch] [!] Unknown dispatch request type %q", req.Type)
+		}
+	}
+
+	if len(emailPaths) == 0 && len(feishuMessages) == 0 {
 		return false
 	}
 
-	if len(processingPaths) == 0 {
-		processingPaths, err = d.movePendingToProcessing()
-		if err != nil {
-			log.Printf("[dispatch] [!] Error preparing pending files: %v", err)
-			return false
+	if !d.callAgentBatch(emailPaths, feishuMessages) {
+		if len(emailPaths) > 0 {
+			log.Printf("[dispatch] [!] Gemini run failed for batch with %d email files", len(emailPaths))
+		} else {
+			log.Printf("[dispatch] [!] Gemini run failed for feishu batch")
 		}
-	}
-
-	if len(processingPaths) == 0 {
 		return false
 	}
-
-	for _, group := range splitFilesBySource(processingPaths) {
-		if len(group) == 0 {
-			continue
-		}
-		if !d.callAgent(group) {
-			log.Printf("[dispatch] [!] Gemini run failed for %s batch, leaving %d files in processing for retry", detectBatchSource(group), len(group))
-			return false
-		}
-		archiveProcessedFiles(group)
-	}
-
 	return true
 }
 
-func (d *Dispatcher) collectProcessingFiles() ([]string, error) {
-	files, err := os.ReadDir(ProcessingDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var processingPaths []string
-	for _, f := range files {
-		if f.IsDir() || strings.HasSuffix(f.Name(), ".tmp") {
-			continue
-		}
-		processingPaths = append(processingPaths, filepath.Join(ProcessingDir, f.Name()))
-	}
-
-	if len(processingPaths) > 0 {
-		fmt.Printf("[%s] [dispatch] Resuming %d files from processing.\n", time.Now().Format("15:04:05"), len(processingPaths))
-	}
-	return processingPaths, nil
-}
-
-func (d *Dispatcher) movePendingToProcessing() ([]string, error) {
-	pendingFiles, err := os.ReadDir(PendingDir)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pendingFiles) == 0 {
-		return nil, nil
-	}
-
-	fmt.Printf("[%s] [dispatch] Found %d files in pending. Moving to processing...\n", time.Now().Format("15:04:05"), len(pendingFiles))
-
-	var processingPaths []string
-	for _, f := range pendingFiles {
-		if f.IsDir() || strings.HasSuffix(f.Name(), ".tmp") {
-			continue
-		}
-		oldPath := filepath.Join(PendingDir, f.Name())
-		newPath := filepath.Join(ProcessingDir, f.Name())
-		if err := os.Rename(oldPath, newPath); err != nil {
-			log.Printf("[dispatch] [!] Error moving file %s: %v", f.Name(), err)
-			continue
-		}
-		processingPaths = append(processingPaths, newPath)
-	}
-
-	return processingPaths, nil
-}
-
-func (d *Dispatcher) callAgent(files []string) bool {
-	if len(files) == 0 {
+func (d *Dispatcher) callAgentBatch(emailPaths, feishuMessages []string) bool {
+	if len(emailPaths) == 0 && len(feishuMessages) == 0 {
 		return true
 	}
-
 	fmt.Printf("\n%s AGENT SESSION START (GATEWAY BATCH) %s\n", strings.Repeat(">", 20), strings.Repeat("<", 20))
-
 	absInit, _ := filepath.Abs("INIT.md")
 	var absFiles []string
-	for _, f := range files {
+	for _, f := range emailPaths {
 		af, _ := filepath.Abs(f)
 		absFiles = append(absFiles, af)
 	}
-	fileList := strings.Join(absFiles, ", ")
-	source := detectBatchSource(files)
-	prompt := buildBatchPrompt(source, absInit, fileList)
+	prompt := buildBatchPrompt(absInit, absFiles, feishuMessages)
+	return d.executeAgentPrompt(classifyPromptSource(absFiles, feishuMessages), prompt, strings.Join(absFiles, "\n"), "")
+}
 
+func (d *Dispatcher) executeAgentPrompt(source, prompt, fileList, feishuSummary string) bool {
 	fmt.Printf("[dispatch] [*] Source: %s\n", source)
-	fmt.Printf("[dispatch] [*] Files to process: %s\n", fileList)
+	if strings.TrimSpace(fileList) != "" {
+		fmt.Printf("[dispatch] [*] Files to process: %s\n", fileList)
+	}
+	if strings.TrimSpace(feishuSummary) != "" {
+		fmt.Printf("[dispatch] [*] Feishu messages:\n%s\n", feishuSummary)
+	}
 	fmt.Printf("[dispatch] [*] Prompt begin\n%s\n[dispatch] [*] Prompt end\n", prompt)
 
 	if strings.TrimSpace(d.AgentCmd) == "" {
@@ -183,7 +121,7 @@ func (d *Dispatcher) callAgent(files []string) bool {
 
 	cmd := exec.Command(commandParts[0], commandParts[1:]...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = DebugMirrorWriter(os.Stderr)
+	cmd.Stderr = os.Stderr
 
 	fmt.Printf("[dispatch] [*] Executing agent command: %s\n", d.AgentCmd)
 	if err := cmd.Run(); err != nil {
@@ -195,61 +133,14 @@ func (d *Dispatcher) callAgent(files []string) bool {
 	return true
 }
 
-func archiveProcessedFiles(paths []string) {
-	fmt.Printf("[dispatch] [*] Cleaning up processing folder...\n")
-	for _, path := range paths {
-		fileName := filepath.Base(path)
-		ext := filepath.Ext(fileName)
-		base := strings.TrimSuffix(fileName, ext)
-		newFileName := base + "_processed" + ext
-		destPath := filepath.Join(HistoryDir, newFileName)
-		if err := os.Rename(path, destPath); err != nil {
-			if !os.IsNotExist(err) {
-				log.Printf("[dispatch] [!] Error archiving file %s: %v", fileName, err)
-			}
-		}
-	}
-}
-
-func splitFilesBySource(paths []string) [][]string {
-	groupOrder := []string{"email", "feishu", "other"}
-	grouped := map[string][]string{
-		"email":  []string{},
-		"feishu": []string{},
-		"other":  []string{},
-	}
-
-	for _, path := range paths {
-		source := detectSourceFromPath(path)
-		grouped[source] = append(grouped[source], path)
-	}
-
-	var batches [][]string
-	for _, key := range groupOrder {
-		if len(grouped[key]) > 0 {
-			batches = append(batches, grouped[key])
-		}
-	}
-	return batches
-}
-
-func detectBatchSource(paths []string) string {
-	if len(paths) == 0 {
-		return "other"
-	}
-	return detectSourceFromPath(paths[0])
-}
-
-func detectSourceFromPath(path string) string {
-	name := strings.ToLower(filepath.Base(path))
-	switch {
-	case strings.HasPrefix(name, "email_"):
+func classifyPromptSource(emailPaths, feishuMessages []string) string {
+	if len(emailPaths) > 0 && len(feishuMessages) == 0 {
 		return "email"
-	case strings.HasPrefix(name, "feishu_"):
-		return "feishu"
-	default:
-		return "other"
 	}
+	if len(emailPaths) == 0 && len(feishuMessages) > 0 {
+		return "feishu"
+	}
+	return "mixed"
 }
 
 func (d *Dispatcher) ProcessOutbox() error {

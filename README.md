@@ -4,7 +4,13 @@ Minimal open-source starting point for a mail-driven assistant gateway.
 
 ## What it does
 
-`glaw` polls an IMAP inbox or accepts Feishu bot messages over a long connection, archives matched content into `gateway/pending/`, and dispatches those files to an external assistant command.
+`glaw` polls an IMAP inbox or accepts Feishu bot messages over a long connection, then dispatches work to an external assistant command.
+
+Dispatch principle:
+
+- Gemini dispatch must stay single-threaded.
+- Do not run multiple assistant sessions in parallel against the same repo.
+- Email and Feishu must share the same serialized dispatch path.
 
 The current implementation is intentionally small:
 
@@ -78,16 +84,24 @@ Dev loop with a one-off agent command override:
 
 The process expects to be started from the repository root so it can access `gateway/` and `INIT.md`.
 
+Dispatch batching:
+
+- `dispatchCh` is buffered to `100`.
+- Each dispatch wake-up drains the current channel and batches that snapshot into one agent run.
+- all-email batch: use the email prompt
+- all-feishu batch: use the feishu prompt
+- mixed batch: use the default prompt
+
 ## Feishu Bot
 
 When both `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are non-empty, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text, post, image, and file events.
 
 Current Feishu routing rules:
 
-- group plain text / image / file messages: archive only
-- group `@bot` text / image / file messages: archive and dispatch
-- p2p text / image / file messages: archive and dispatch
-- inbound image and file resources are downloaded into `gateway/media/` and listed in the archived message file
+- group plain text / image / file messages: ignore after raw logging
+- group `@bot` text / image / file messages: dispatch inline
+- p2p text / image / file messages: dispatch inline
+- inbound image and file resources are downloaded into `gateway/media/` and referenced inside the inline prompt body
 
 Required Feishu setup:
 

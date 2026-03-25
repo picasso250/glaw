@@ -36,9 +36,6 @@ type Config struct {
 	Feishu         gatewaypkg.FeishuConfig
 }
 
-var debugLogger *log.Logger
-var debugLogWriter io.Writer
-
 func filenameFromContentType(contentType string) string {
 	switch contentType {
 	case "image/jpeg":
@@ -245,45 +242,8 @@ func reloadFilterSendersFromEnv() ([]string, error) {
 	return parseFilterSenders(val), nil
 }
 
-func signalDispatch(dispatchCh chan struct{}) {
-	select {
-	case dispatchCh <- struct{}{}:
-	default:
-	}
-}
-
-func previewDispatchBatch() {
-	dirs := []string{gatewaypkg.ProcessingDir, gatewaypkg.PendingDir}
-	found := false
-
-	for _, dir := range dirs {
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			log.Printf("[dispatch] [!] preview read %s failed: %v", dir, err)
-			continue
-		}
-
-		for _, f := range files {
-			if f.IsDir() || strings.HasSuffix(f.Name(), ".tmp") {
-				continue
-			}
-
-			found = true
-			path := filepath.Join(dir, f.Name())
-			body, err := os.ReadFile(path)
-			if err != nil {
-				log.Printf("[dispatch] [!] preview read file %s failed: %v", path, err)
-				continue
-			}
-
-			fmt.Printf("[dispatch] [skip] queued file: %s\n", path)
-			fmt.Printf("[dispatch] [skip] content:\n%s\n", string(body))
-		}
-	}
-
-	if !found {
-		fmt.Println("[dispatch] [skip] no queued files")
-	}
+func signalDispatch(dispatchCh chan gatewaypkg.DispatchRequest, req gatewaypkg.DispatchRequest) {
+	dispatchCh <- req
 }
 
 func connectMail(config Config) (*client.Client, error) {
@@ -312,11 +272,7 @@ func connectMail(config Config) (*client.Client, error) {
 	return c, nil
 }
 
-func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatchCh chan struct{}) error {
-	if err := os.MkdirAll(gatewaypkg.PendingDir, 0755); err != nil {
-		log.Printf("[check_mail] [!] Create pending dir error: %v", err)
-		return nil
-	}
+func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatchCh chan gatewaypkg.DispatchRequest) error {
 	if err := os.MkdirAll(gatewaypkg.MediaDir, 0755); err != nil {
 		log.Printf("[check_mail] [!] Create media dir error: %v", err)
 		return nil
@@ -485,9 +441,12 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatc
 
 			archiveFile, err := gatewaypkg.SavePendingEmail(msg.Uid, emailAddr, archiveContent, time.Now())
 			if err == nil {
-				fmt.Printf("    -> [check_mail] Saved to Pending: %s\n", archiveFile)
+				fmt.Printf("    -> [check_mail] Saved to History: %s\n", archiveFile)
 				gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, subject, gatewaypkg.StateProcessed)
-				signalDispatch(dispatchCh)
+				signalDispatch(dispatchCh, gatewaypkg.DispatchRequest{
+					Type:    "email",
+					Message: archiveFile,
+				})
 			}
 		} else {
 			gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, msg.Envelope.Subject, gatewaypkg.StateIgnored)
@@ -501,23 +460,29 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatc
 	return nil
 }
 
-func dispatchLoop(dispatcher *gatewaypkg.Dispatcher, dispatchCh <-chan struct{}, stopChan <-chan bool, skipDispatch bool) {
+func dispatchLoop(dispatcher *gatewaypkg.Dispatcher, dispatchCh <-chan gatewaypkg.DispatchRequest, stopChan <-chan bool) {
 	for {
 		select {
 		case <-stopChan:
 			fmt.Println("[dispatch] Stopping...")
 			return
-		case <-dispatchCh:
-			if skipDispatch {
-				previewDispatchBatch()
-				continue
+		case req := <-dispatchCh:
+			batch := []gatewaypkg.DispatchRequest{req}
+		drain:
+			for {
+				select {
+				case nextReq := <-dispatchCh:
+					batch = append(batch, nextReq)
+				default:
+					break drain
+				}
 			}
-			dispatcher.Dispatch()
+			dispatcher.DispatchBatch(batch)
 		}
 	}
 }
 
-func mailLoop(config Config, db *sql.DB, dispatchCh chan struct{}, stopChan <-chan bool) {
+func mailLoop(config Config, db *sql.DB, dispatchCh chan gatewaypkg.DispatchRequest, stopChan <-chan bool) {
 	if err := gatewaypkg.EnsureRuntimeDirs(); err != nil {
 		log.Printf("[!] gateway init dirs error: %v", err)
 		return
@@ -601,7 +566,6 @@ func mailLoop(config Config, db *sql.DB, dispatchCh chan struct{}, stopChan <-ch
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	skipDispatch := fs.Bool("skip-dispatch", false, "log queued message files instead of dispatching them")
 	agentCmd := fs.String("agent-cmd", "", "override AGENT_CMD from .env for this serve process")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -632,13 +596,9 @@ func runServe(args []string) error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	stopGateway := make(chan bool)
-	dispatchCh := make(chan struct{}, 1)
+	dispatchCh := make(chan gatewaypkg.DispatchRequest, 100)
 
-	if *skipDispatch {
-		fmt.Println(">>> Gateway starting (check-mail + skip-dispatch preview)...")
-	} else {
-		fmt.Println(">>> Gateway starting (check-mail + dispatch)...")
-	}
+	fmt.Println(">>> Gateway starting (check-mail + dispatch)...")
 
 	feishuEnabled := strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != ""
 	config.Feishu.Enable = feishuEnabled
@@ -652,11 +612,8 @@ func runServe(args []string) error {
 		AgentCmd:     config.AgentCmd,
 		FeishuClient: feishuClient,
 	}
-	if dispatcher.HasWork() {
-		signalDispatch(dispatchCh)
-	}
 
-	go dispatchLoop(dispatcher, dispatchCh, stopGateway, *skipDispatch)
+	go dispatchLoop(dispatcher, dispatchCh, stopGateway)
 	go mailLoop(config, db, dispatchCh, stopGateway)
 	if feishuEnabled {
 		go func() {
@@ -720,12 +677,9 @@ func runFeishuListMessages(args []string) error {
 	if !resp.Success() {
 		return fmt.Errorf("list messages failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
-	logDebugJSON("feishu.list_messages.response", map[string]any{
-		"chat_id":   strings.TrimSpace(*chatID),
-		"page_size": *pageSize,
-		"minutes":   *minutes,
-		"response":  resp,
-	})
+	if err := appendFeishuListMessagesRawLog(strings.TrimSpace(*chatID), *pageSize, *minutes, resp); err != nil {
+		return fmt.Errorf("write feishu list-messages raw log: %w", err)
+	}
 	if resp.Data == nil || len(resp.Data.Items) == 0 {
 		fmt.Println("no messages")
 		return nil
@@ -833,29 +787,11 @@ func runFeishuSend(args []string) error {
 	}
 
 	payload := provided[0]
-	logDebugJSON("feishu.send.invoke", map[string]any{
-		"message_id": strings.TrimSpace(*messageID),
-		"reply_type": payload.label,
-		"payload":    payload.payload,
-	})
 	dispatcher := &gatewaypkg.Dispatcher{FeishuClient: client}
 	replyMessageID, savedPath, err := dispatcher.SubmitReply(payload.actionType, *messageID, payload.payload)
 	if err != nil {
-		logDebugJSON("feishu.send.error", map[string]any{
-			"message_id": strings.TrimSpace(*messageID),
-			"reply_type": payload.label,
-			"payload":    payload.payload,
-			"error":      err.Error(),
-		})
 		return fmt.Errorf("send %s reply to Feishu message %s: %w", payload.label, strings.TrimSpace(*messageID), err)
 	}
-	logDebugJSON("feishu.send.result", map[string]any{
-		"message_id":       strings.TrimSpace(*messageID),
-		"reply_type":       payload.label,
-		"payload":          payload.payload,
-		"reply_message_id": replyMessageID,
-		"saved_path":       savedPath,
-	})
 
 	fmt.Printf("sent %s reply to message %s\n", payload.label, strings.TrimSpace(*messageID))
 	fmt.Printf("reply_message_id=%s\n", replyMessageID)
@@ -920,25 +856,13 @@ func runFeishu(args []string) error {
 
 func usage() string {
 	return strings.TrimSpace(`Usage:
-  glaw [--debug-log-file <path>] serve [--skip-dispatch] [--agent-cmd <command-prefix>]
-  glaw [--debug-log-file <path>] feishu list-messages -chat-id <chat_id> [-page-size 20] [-minutes 120]
-  glaw [--debug-log-file <path>] feishu send -message-id <message_id> (-text <text> | -image <path> | -file <path>)`)
+  glaw serve [--agent-cmd <command-prefix>]
+  glaw feishu list-messages -chat-id <chat_id> [-page-size 20] [-minutes 120]
+  glaw feishu send -message-id <message_id> (-text <text> | -image <path> | -file <path>)`)
 }
 
 func main() {
-	fs := flag.NewFlagSet("glaw", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	debugLogFile := fs.String("debug-log-file", "", "append debug logs to this file")
-
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		os.Exit(2)
-	}
-	if err := configureDebugLogging(*debugLogFile); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	args := fs.Args()
+	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage())
 		os.Exit(2)
@@ -963,58 +887,30 @@ func main() {
 	}
 }
 
-func configureDebugLogging(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil
+func appendFeishuListMessagesRawLog(chatID string, pageSize, minutes int, resp *larkim.ListMessageResp) error {
+	if err := os.MkdirAll(gatewaypkg.LogsDir, 0755); err != nil {
+		return err
 	}
 
-	resolvedPath, err := expandUserPath(path)
+	body, err := json.Marshal(map[string]any{
+		"chat_id":   chatID,
+		"page_size": pageSize,
+		"minutes":   minutes,
+		"response":  resp,
+	})
 	if err != nil {
-		return fmt.Errorf("resolve --debug-log-file: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
-		return fmt.Errorf("create debug log dir: %w", err)
+		return err
 	}
 
-	f, err := os.OpenFile(resolvedPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logPath := filepath.Join(gatewaypkg.LogsDir, "feishu_list_messages_raw.jsonl")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return fmt.Errorf("open debug log file %s: %w", resolvedPath, err)
+		return err
 	}
+	defer f.Close()
 
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
-	debugLogger = log.New(f, "", log.LstdFlags)
-	debugLogWriter = f
-	gatewaypkg.SetDebugLogWriter(f)
-	log.Printf("[debug] logging enabled at %s", filepath.ToSlash(resolvedPath))
+	if _, err := f.Write(append(body, '\n')); err != nil {
+		return err
+	}
 	return nil
-}
-
-func expandUserPath(path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	if path == "~" {
-		return os.UserHomeDir()
-	}
-	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, path[2:]), nil
-	}
-	return path, nil
-}
-
-func logDebugJSON(label string, value any) {
-	if debugLogger == nil {
-		return
-	}
-	body, err := json.Marshal(value)
-	if err != nil {
-		debugLogger.Printf("%s marshal_error=%v", label, err)
-		return
-	}
-	debugLogger.Printf("%s %s", label, string(body))
 }

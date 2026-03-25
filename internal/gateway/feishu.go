@@ -52,7 +52,7 @@ type feishuFileContent struct {
 
 var feishuEventLogMu sync.Mutex
 
-func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}) error {
+func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan DispatchRequest) error {
 	if !config.Enable {
 		return nil
 	}
@@ -77,7 +77,7 @@ func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan struct
 	return wsClient.Start(context.Background())
 }
 
-func handleFeishuEvent(client *lark.Client, config FeishuConfig, db *sql.DB, dispatchCh chan struct{}, event *larkim.P2MessageReceiveV1) error {
+func handleFeishuEvent(client *lark.Client, config FeishuConfig, db *sql.DB, dispatchCh chan DispatchRequest, event *larkim.P2MessageReceiveV1) error {
 	if event == nil || event.Event == nil || event.Event.Message == nil {
 		return nil
 	}
@@ -146,31 +146,21 @@ func handleFeishuEvent(client *lark.Client, config FeishuConfig, db *sql.DB, dis
 	})
 
 	shouldDispatch := shouldDispatchFeishuMessage(chatType, message.Mentions)
-	var archiveFile string
 	if shouldDispatch {
-		archiveFile, err = SavePendingMessage("feishu", messageID, senderOpenID, archiveContent, time.Now())
-		if err != nil {
-			return fmt.Errorf("save pending for %s: %w", messageID, err)
+		if err := SaveMessageState(db, "feishu", messageID, senderOpenID, chatType, StateProcessed); err != nil {
+			return fmt.Errorf("save state for %s: %w", messageID, err)
 		}
-	} else {
-		archiveFile, err = SaveHistoryMessage("feishu", messageID, senderOpenID, archiveContent, time.Now())
-		if err != nil {
-			return fmt.Errorf("save history for %s: %w", messageID, err)
-		}
-	}
-
-	if err := SaveMessageState(db, "feishu", messageID, senderOpenID, chatType, StateProcessed); err != nil {
-		return fmt.Errorf("save state for %s: %w", messageID, err)
-	}
-
-	if shouldDispatch {
-		log.Printf("[feishu] [*] Queued message %s for dispatch at %s", messageID, archiveFile)
+		log.Printf("[feishu] [*] Queued inline dispatch for message %s", messageID)
 		select {
-		case dispatchCh <- struct{}{}:
+		case dispatchCh <- DispatchRequest{
+			Type:    "feishu",
+			Message: archiveContent,
+		}:
 		default:
+			log.Printf("[feishu] [!] Dispatch channel full, dropping inline message %s", messageID)
 		}
 	} else {
-		log.Printf("[feishu] [*] Archived message %s to %s", messageID, archiveFile)
+		log.Printf("[feishu] [*] Ignored message %s after filtering", messageID)
 	}
 	return nil
 }

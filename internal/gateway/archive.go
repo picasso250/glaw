@@ -32,7 +32,7 @@ type ArchivedMessage struct {
 }
 
 func EnsureRuntimeDirs() error {
-	for _, dir := range []string{PendingDir, ProcessingDir, HistoryDir, MediaDir, OutboxDir, LogsDir} {
+	for _, dir := range []string{HistoryDir, MediaDir, OutboxDir, LogsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
@@ -96,11 +96,11 @@ func BuildMessageArchiveContent(message ArchivedMessage) string {
 }
 
 func SavePendingEmail(uid uint32, sender string, content string, now time.Time) (string, error) {
-	return SavePendingMessage("email", fmt.Sprintf("%d", uid), sender, content, now)
+	return SaveHistoryMessage("email", fmt.Sprintf("%d", uid), sender, content, now)
 }
 
 func SavePendingMessage(source, externalID, sender, content string, now time.Time) (string, error) {
-	return saveArchivedMessage(PendingDir, source, externalID, sender, content, now)
+	return SaveHistoryMessage(source, externalID, sender, content, now)
 }
 
 func SaveHistoryMessage(source, externalID, sender, content string, now time.Time) (string, error) {
