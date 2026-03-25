@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkdispatcher "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
@@ -39,6 +41,15 @@ type feishuPostElement struct {
 	Text string `json:"text"`
 }
 
+type feishuImageContent struct {
+	ImageKey string `json:"image_key"`
+}
+
+type feishuFileContent struct {
+	FileKey  string `json:"file_key"`
+	FileName string `json:"file_name"`
+}
+
 var feishuEventLogMu sync.Mutex
 
 func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}) error {
@@ -49,22 +60,24 @@ func StartFeishuLongConn(config FeishuConfig, db *sql.DB, dispatchCh chan struct
 		return fmt.Errorf("FEISHU_APP_ID or FEISHU_APP_SECRET is empty")
 	}
 
+	client := lark.NewClient(config.AppID, config.AppSecret)
+
 	handler := larkdispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
-			return handleFeishuEvent(config, db, dispatchCh, event)
+			return handleFeishuEvent(client, config, db, dispatchCh, event)
 		})
 
-	client := larkws.NewClient(
+	wsClient := larkws.NewClient(
 		config.AppID,
 		config.AppSecret,
 		larkws.WithEventHandler(handler),
 	)
 
 	log.Printf("[feishu] [*] Starting long connection client")
-	return client.Start(context.Background())
+	return wsClient.Start(context.Background())
 }
 
-func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}, event *larkim.P2MessageReceiveV1) error {
+func handleFeishuEvent(client *lark.Client, config FeishuConfig, db *sql.DB, dispatchCh chan struct{}, event *larkim.P2MessageReceiveV1) error {
 	if event == nil || event.Event == nil || event.Event.Message == nil {
 		return nil
 	}
@@ -113,7 +126,7 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 		return fmt.Errorf("lookup state for %s: %w", messageID, err)
 	}
 
-	body, err := extractFeishuMessageText(messageType, derefString(message.Content))
+	body, attachments, err := extractFeishuMessage(client, messageID, messageType, derefString(message.Content))
 	if err != nil {
 		return fmt.Errorf("parse message content for %s: %w", messageID, err)
 	}
@@ -129,6 +142,7 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 		Date:           msgTime,
 		Mentions:       formatFeishuMentions(message.Mentions),
 		Body:           body,
+		Attachments:    attachments,
 	})
 
 	shouldDispatch := shouldDispatchFeishuMessage(chatType, message.Mentions)
@@ -163,21 +177,35 @@ func handleFeishuEvent(config FeishuConfig, db *sql.DB, dispatchCh chan struct{}
 
 func isSupportedFeishuMessageType(messageType string) bool {
 	switch strings.TrimSpace(messageType) {
-	case "text", "post":
+	case "text", "post", "image", "file":
 		return true
 	default:
 		return false
 	}
 }
 
-func extractFeishuMessageText(messageType, raw string) (string, error) {
+func extractFeishuMessage(client *lark.Client, messageID, messageType, raw string) (string, []string, error) {
 	switch strings.TrimSpace(messageType) {
 	case "text":
-		return extractFeishuText(raw)
+		body, err := extractFeishuText(raw)
+		return body, nil, err
 	case "post":
-		return extractFeishuPostText(raw)
+		body, err := extractFeishuPostText(raw)
+		return body, nil, err
+	case "image":
+		path, err := downloadFeishuImageMessage(client, messageID, raw)
+		if err != nil {
+			return "", nil, err
+		}
+		return "[Feishu image]", []string{path}, nil
+	case "file":
+		body, path, err := downloadFeishuFileMessage(client, messageID, raw)
+		if err != nil {
+			return "", nil, err
+		}
+		return body, []string{path}, nil
 	default:
-		return "", fmt.Errorf("unsupported message type %q", messageType)
+		return "", nil, fmt.Errorf("unsupported message type %q", messageType)
 	}
 }
 
@@ -214,6 +242,125 @@ func extractFeishuPostText(raw string) (string, error) {
 	}
 
 	return strings.TrimSpace(strings.Join(parts, "\n")), nil
+}
+
+func downloadFeishuImageMessage(client *lark.Client, messageID, raw string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("feishu client is nil")
+	}
+
+	var content feishuImageContent
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(content.ImageKey) == "" {
+		return "", fmt.Errorf("image_key is empty")
+	}
+
+	path, err := downloadFeishuMessageResource(client, messageID, content.ImageKey, "image", "")
+	if err == nil {
+		return path, nil
+	}
+
+	// Fall back to direct image download for bot-uploaded images.
+	resp, getErr := client.Im.V1.Image.Get(context.Background(), larkim.NewGetImageReqBuilder().
+		ImageKey(content.ImageKey).
+		Build())
+	if getErr != nil {
+		return "", fmt.Errorf("download image resource: %w (fallback get image: %v)", err, getErr)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("download image resource: %w (fallback get image failed: code=%d msg=%s)", err, resp.Code, resp.Msg)
+	}
+
+	return saveFeishuMedia(resp.File, resp.FileName, "feishu_image")
+}
+
+func downloadFeishuFileMessage(client *lark.Client, messageID, raw string) (string, string, error) {
+	if client == nil {
+		return "", "", fmt.Errorf("feishu client is nil")
+	}
+
+	var content feishuFileContent
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(content.FileKey) == "" {
+		return "", "", fmt.Errorf("file_key is empty")
+	}
+
+	path, err := downloadFeishuMessageResource(client, messageID, content.FileKey, "file", content.FileName)
+	if err != nil {
+		return "", "", err
+	}
+
+	body := "[Feishu file]"
+	if strings.TrimSpace(content.FileName) != "" {
+		body = "[Feishu file] " + strings.TrimSpace(content.FileName)
+	}
+	return body, path, nil
+}
+
+func downloadFeishuMessageResource(client *lark.Client, messageID, key, resourceType, fallbackName string) (string, error) {
+	resp, err := client.Im.V1.MessageResource.Get(context.Background(), larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(key).
+		Type(resourceType).
+		Build())
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	return saveFeishuMedia(resp.File, coalesceStrings(resp.FileName, fallbackName), "feishu_"+resourceType)
+}
+
+func saveFeishuMedia(reader io.Reader, fileName, prefix string) (string, error) {
+	if err := os.MkdirAll(MediaDir, 0755); err != nil {
+		return "", err
+	}
+
+	baseName := sanitizeMediaFilename(fileName)
+	if baseName == "" {
+		baseName = prefix + ".bin"
+	}
+
+	ext := filepath.Ext(baseName)
+	nameOnly := strings.TrimSuffix(baseName, ext)
+	savedName := fmt.Sprintf("%s_%d_%s%s", prefix, time.Now().UnixNano(), sanitizePathToken(nameOnly), ext)
+	savedPath := filepath.Join(MediaDir, savedName)
+
+	f, err := os.Create(savedPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, reader); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(savedPath), nil
+}
+
+func sanitizeMediaFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = filepath.Base(name)
+	name = strings.NewReplacer(":", "-", "/", "-", "\\", "-", "\t", "_", "\n", "_", "\r", "_").Replace(name)
+	return name
+}
+
+func coalesceStrings(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func parseFeishuTime(values ...string) time.Time {

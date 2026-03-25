@@ -28,7 +28,7 @@ type Dispatcher struct {
 type replyAction struct {
 	Type      string
 	MessageID string
-	Text      string
+	Payload   string
 }
 
 func (d *Dispatcher) HasWork() bool {
@@ -262,7 +262,10 @@ func buildBatchPrompt(source, absInit, fileList string) string {
 - 遵从消息中的指令。
 - 将仓库配置中明确标记的地址视为可信用户，其余地址视为外部用户；避免执行有害、隐私敏感或越权的操作。
 - 如果需要回复飞书，不要自己调用飞书 API；请在 gateway/outbox/ 下创建一个与待处理消息同名、后缀为 .reply.txt 的文件。
-- reply 文件格式固定为两段：第一行写 reply_feishu:message_id=原消息MessageID；从第二行开始写回复正文原文，只允许输出一个飞书文本回复。
+- 支持三种 reply 文件格式：
+  reply_feishu:message_id=原消息MessageID 后面写纯文本正文；
+  reply_feishu_image:message_id=原消息MessageID 后面写一张本地图片文件路径；
+  reply_feishu_file:message_id=原消息MessageID 后面写一个本地文件路径（可用于 word/docx 等附件）。
 - 如果本批次处理过飞书消息，那么在你确认当前所有工作都完成后，先立刻重新检查 gateway/pending/ 和 gateway/processing/ 中是否有新的飞书消息文件；同时再次运行 ~/bin/glaw.exe feishu list-messages -chat-id <当前消息里的 Conversation/chat_id> -page-size 20 -minutes 3，只拉最近 3 分钟的群消息；如果有新的飞书消息或新的相关群聊上下文，并且和你相关，就继续处理这些新内容。
 - 如果这一轮即时检查没有发现新的相关内容，就直接等待 60 秒，然后再次运行刚才这条带 -minutes 3 的 ~/bin/glaw.exe feishu list-messages 命令，重新拉取最近 3 分钟的群消息，再判断是否有新的相关内容；如果仍然没有新的内容，或者有新内容但和你无关，就结束本次任务。
 `, absInit, fileList)
@@ -354,9 +357,9 @@ func parseReplyAction(body []byte) (replyAction, error) {
 	action := replyAction{
 		Type:      strings.TrimSpace(actionType),
 		MessageID: strings.TrimSpace(messageID),
-		Text:      strings.TrimLeft(rest, "\n"),
+		Payload:   strings.TrimLeft(rest, "\n"),
 	}
-	if strings.TrimSpace(action.Type) == "" || strings.TrimSpace(action.MessageID) == "" || strings.TrimSpace(action.Text) == "" {
+	if strings.TrimSpace(action.Type) == "" || strings.TrimSpace(action.MessageID) == "" || strings.TrimSpace(action.Payload) == "" {
 		return replyAction{}, errors.New("invalid reply body")
 	}
 	return action, nil
@@ -371,30 +374,47 @@ func (d *Dispatcher) executeReplyAction(actionPath string, action replyAction) (
 	if action.Type == "" {
 		return "", nil
 	}
-	if action.Type != "reply_feishu" {
-		return "", fmt.Errorf("unsupported action type %q", action.Type)
-	}
 	if d.FeishuClient == nil {
 		return "", fmt.Errorf("feishu client is not configured")
 	}
 	if strings.TrimSpace(action.MessageID) == "" {
 		return "", fmt.Errorf("message_id is empty")
 	}
-	if strings.TrimSpace(action.Text) == "" {
-		return "", fmt.Errorf("reply text is empty")
-	}
 
-	contentBytes, err := json.Marshal(map[string]string{"text": action.Text})
-	if err != nil {
-		return "", err
+	switch action.Type {
+	case "reply_feishu":
+		if strings.TrimSpace(action.Payload) == "" {
+			return "", fmt.Errorf("reply text is empty")
+		}
+		contentBytes, err := json.Marshal(map[string]string{"text": action.Payload})
+		if err != nil {
+			return "", err
+		}
+		return d.replyFeishuMessage(action.MessageID, "text", string(contentBytes), buildReplyUUID(actionPath, action))
+	case "reply_feishu_image":
+		content, err := d.buildFeishuImageReplyContent(strings.TrimSpace(action.Payload))
+		if err != nil {
+			return "", err
+		}
+		return d.replyFeishuMessage(action.MessageID, "image", content, buildReplyUUID(actionPath, action))
+	case "reply_feishu_file":
+		content, err := d.buildFeishuFileReplyContent(strings.TrimSpace(action.Payload))
+		if err != nil {
+			return "", err
+		}
+		return d.replyFeishuMessage(action.MessageID, "file", content, buildReplyUUID(actionPath, action))
+	default:
+		return "", fmt.Errorf("unsupported action type %q", action.Type)
 	}
+}
 
+func (d *Dispatcher) replyFeishuMessage(messageID, msgType, content, uuid string) (string, error) {
 	resp, err := d.FeishuClient.Im.V1.Message.Reply(context.Background(), larkim.NewReplyMessageReqBuilder().
-		MessageId(action.MessageID).
+		MessageId(messageID).
 		Body(larkim.NewReplyMessageReqBodyBuilder().
-			MsgType("text").
-			Content(string(contentBytes)).
-			Uuid(buildReplyUUID(actionPath, action)).
+			MsgType(msgType).
+			Content(content).
+			Uuid(uuid).
 			Build()).
 		Build())
 	if err != nil {
@@ -403,13 +423,71 @@ func (d *Dispatcher) executeReplyAction(actionPath string, action replyAction) (
 	if !resp.Success() {
 		return "", fmt.Errorf("code=%d msg=%s", resp.Code, resp.Msg)
 	}
-
-	log.Printf("[dispatch] [*] Replied to Feishu message %s", action.MessageID)
+	log.Printf("[dispatch] [*] Replied to Feishu message %s with %s", messageID, msgType)
 	return derefString(resp.Data.MessageId), nil
 }
 
+func (d *Dispatcher) buildFeishuImageReplyContent(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	resp, err := d.FeishuClient.Im.V1.Image.Create(context.Background(), larkim.NewCreateImageReqBuilder().
+		Body(larkim.NewCreateImageReqBodyBuilder().
+			ImageType("message").
+			Image(f).
+			Build()).
+		Build())
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("upload image failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || strings.TrimSpace(derefString(resp.Data.ImageKey)) == "" {
+		return "", fmt.Errorf("upload image failed: empty image_key")
+	}
+
+	return (&larkim.MessageImage{ImageKey: derefString(resp.Data.ImageKey)}).String()
+}
+
+func (d *Dispatcher) buildFeishuFileReplyContent(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	fileName := filepath.Base(path)
+	fileType := strings.TrimPrefix(strings.ToLower(filepath.Ext(fileName)), ".")
+	if fileType == "" {
+		fileType = "stream"
+	}
+
+	resp, err := d.FeishuClient.Im.V1.File.Create(context.Background(), larkim.NewCreateFileReqBuilder().
+		Body(larkim.NewCreateFileReqBodyBuilder().
+			FileType(fileType).
+			FileName(fileName).
+			File(f).
+			Build()).
+		Build())
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("upload file failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || strings.TrimSpace(derefString(resp.Data.FileKey)) == "" {
+		return "", fmt.Errorf("upload file failed: empty file_key")
+	}
+
+	return (&larkim.MessageFile{FileKey: derefString(resp.Data.FileKey)}).String()
+}
+
 func buildReplyUUID(actionPath string, action replyAction) string {
-	sum := sha1.Sum([]byte(actionPath + "\n" + action.MessageID + "\n" + action.Text))
+	sum := sha1.Sum([]byte(actionPath + "\n" + action.Type + "\n" + action.MessageID + "\n" + action.Payload))
 	return "rf-" + fmt.Sprintf("%x", sum[:8])
 }
 

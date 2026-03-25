@@ -80,13 +80,14 @@ The process expects to be started from the repository root so it can access `gat
 
 ## Feishu Bot
 
-When both `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are non-empty, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text events.
+When both `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are non-empty, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text, post, image, and file events.
 
 Current Feishu routing rules:
 
-- group plain text messages: archive only
-- group `@bot` text messages: archive and dispatch
-- p2p text messages: archive and dispatch
+- group plain text / image / file messages: archive only
+- group `@bot` text / image / file messages: archive and dispatch
+- p2p text / image / file messages: archive and dispatch
+- inbound image and file resources are downloaded into `gateway/media/` and listed in the archived message file
 
 Required Feishu setup:
 
@@ -96,6 +97,7 @@ Required Feishu setup:
 - grant `im:message.group_msg` if you want to receive normal group messages, not only `@bot` mentions
 - grant the p2p message permission for bot chats if you want to receive all direct messages
 - `im:message:readonly` is useful for message read access, but it does not replace the bot send scope above
+- if you want the gateway to download user-sent images and files from messages, also grant the message resource read permission required by the Feishu `message_resource.get` API
 
 If `im:message.group_msg` is missing, Feishu will typically only deliver group messages that explicitly mention the bot.
 
@@ -112,6 +114,14 @@ Use the built binary for ad hoc Feishu history pulls:
 ```powershell
 ~/bin/glaw.exe feishu list-messages -chat-id <chat_id> -page-size 20 -minutes 180
 ```
+
+## Feishu Outbox Reply Format
+
+For Feishu replies, create a `.reply.txt` file in `gateway/outbox/`:
+
+- text reply: first line `reply_feishu:message_id=<message_id>`, remaining content is the text body
+- image reply: first line `reply_feishu_image:message_id=<message_id>`, remaining content is one local image path
+- file reply: first line `reply_feishu_file:message_id=<message_id>`, remaining content is one local file path such as a `.docx`
 
 ## Feishu Context Lessons
 
