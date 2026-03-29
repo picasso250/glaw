@@ -585,6 +585,7 @@ func runServe(args []string) error {
 	if strings.TrimSpace(*agentCmd) != "" {
 		config.AgentCmd = *agentCmd
 	}
+	log.Printf("[serve] FilterSenders=%q", config.FilterSenders)
 
 	db, err := gatewaypkg.InitDB()
 	if err != nil {
