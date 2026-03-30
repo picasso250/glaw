@@ -54,9 +54,9 @@ if (!(Test-Path $RootEnv)) {
 }
 
 $rootEnvValues = Load-EnvMap -Path $RootEnv
-foreach ($requiredKey in @("MAIL_USER", "MAIL_PASS", "MAIL_IMAP_SERVER")) {
+foreach ($requiredKey in @("MAIL_USER", "MAIL_PASS", "MAIL_IMAP_SERVER", "AGENT_CMD")) {
     if (-not $rootEnvValues.ContainsKey($requiredKey) -or [string]::IsNullOrWhiteSpace($rootEnvValues[$requiredKey])) {
-        throw "Required key missing in $RootEnv: $requiredKey"
+        throw "Required key missing in ${RootEnv}: $requiredKey"
     }
 }
 
@@ -85,7 +85,7 @@ $envLines = @(
     "MAIL_USER=$($rootEnvValues["MAIL_USER"])",
     "MAIL_PASS=$($rootEnvValues["MAIL_PASS"])",
     "MAIL_IMAP_SERVER=$($rootEnvValues["MAIL_IMAP_SERVER"])",
-    "AGENT_CMD=kilocode run"
+    "AGENT_CMD=$($rootEnvValues["AGENT_CMD"])"
 )
 Set-Content -LiteralPath $EnvPath -Value $envLines -Encoding UTF8
 Write-Ok "Wrote $EnvPath"
