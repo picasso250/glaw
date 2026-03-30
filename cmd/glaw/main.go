@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,14 +31,17 @@ import (
 )
 
 type Config struct {
-	MailUser       string
-	MailPass       string
-	MailImapServer string
-	FilterSenders  []string
-	FilterListPath string
-	AgentCmd       string
-	EnvPath        string
-	Feishu         gatewaypkg.FeishuConfig
+	MailUser           string
+	MailPass           string
+	MailImapServer     string
+	MailSmtpServer     string
+	MailSmtpPort       int
+	FilterSenders      []string
+	FilterListPath     string
+	AgentCmd           string
+	EnvPath            string
+	ExecSubjectKeyword string
+	Feishu             gatewaypkg.FeishuConfig
 }
 
 const defaultMailFilterListName = "mail_filter_senders.txt"
@@ -229,6 +233,7 @@ func loadEnvValues(envPath string) (map[string]string, error) {
 func loadEnv(envPath string) (Config, error) {
 	config := Config{
 		MailImapServer: "imap.163.com",
+		MailSmtpPort:   465,
 		EnvPath:        strings.TrimSpace(envPath),
 	}
 	values, err := loadEnvValues(envPath)
@@ -244,6 +249,16 @@ func loadEnv(envPath string) (Config, error) {
 	}
 	if val, ok := values["MAIL_IMAP_SERVER"]; ok {
 		config.MailImapServer = val
+	}
+	if val, ok := values["MAIL_SMTP_SERVER"]; ok {
+		config.MailSmtpServer = val
+	}
+	if val, ok := values["MAIL_SMTP_PORT"]; ok {
+		port, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil {
+			return config, fmt.Errorf("invalid MAIL_SMTP_PORT %q: %w", val, err)
+		}
+		config.MailSmtpPort = port
 	}
 	if val, ok := values["AGENT_CMD"]; ok {
 		config.AgentCmd = val
@@ -527,16 +542,28 @@ func checkAndProcessEmails(c *client.Client, config *Config, db *sql.DB, dispatc
 				continue
 			}
 
-			archiveContent := gatewaypkg.BuildEmailArchiveContent(*archivedEmail)
+			if subjectMatchesKeyword(subject, config.ExecSubjectKeyword) {
+				log.Printf("[check_mail] [*] Subject matched exec keyword; bypass dispatch for uid=%d", msg.Uid)
+				gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, subject, gatewaypkg.StateProcessed)
+				configCopy := *config
+				archivedEmailCopy := *archivedEmail
+				go func(uid uint32, sender, matchedSubject string, email gatewaypkg.ArchivedEmail) {
+					if err := processExecutionMail(&configCopy, uid, sender, matchedSubject, &email); err != nil {
+						log.Printf("[check_mail] [!] Execution mail handling failed for uid=%d: %v", uid, err)
+					}
+				}(msg.Uid, emailAddr, subject, archivedEmailCopy)
+				continue
+			}
 
+			archiveContent := gatewaypkg.BuildEmailArchiveContent(*archivedEmail)
 			archiveFile, err := gatewaypkg.SavePendingEmail(msg.Uid, emailAddr, archiveContent, time.Now())
 			if err == nil {
 				fmt.Printf("    -> [check_mail] Saved to History: %s\n", archiveFile)
-				gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, subject, gatewaypkg.StateProcessed)
 				signalDispatch(dispatchCh, gatewaypkg.DispatchRequest{
 					Type:    "email",
 					Message: archiveFile,
 				})
+				gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, subject, gatewaypkg.StateProcessed)
 			}
 		} else {
 			gatewaypkg.SaveEmailState(db, msg.Uid, emailAddr, msg.Envelope.Subject, gatewaypkg.StateIgnored)
@@ -761,6 +788,7 @@ func runServe(args []string) error {
 	cronConfig := fs.String("cron-config", gatewaypkg.DefaultCronConfigPath, "path to scheduler config JSON")
 	filterList := fs.String("mail-filter", defaultMailFilterListName, "mail sender allowlist file path, or a directory containing that file")
 	envPath := fs.String("env", "auto", "env file path, or 'auto' to use upward lookup")
+	execSubjectKeyword := fs.String("exec-subject-keyword", "", "if subject contains this keyword, bypass dispatch and execute the single attached .ps1/.py file")
 	dryRun := fs.Bool("dry-run", false, "load and print effective configuration, then exit without starting services")
 	runPrompt := fs.String("run-prompt", "", "run one prompt with the configured agent command, then exit")
 	if err := fs.Parse(args); err != nil {
@@ -781,6 +809,7 @@ func runServe(args []string) error {
 	if strings.TrimSpace(*agentCmd) != "" {
 		config.AgentCmd = *agentCmd
 	}
+	config.ExecSubjectKeyword = strings.TrimSpace(*execSubjectKeyword)
 	filters, resolvedFilterPath, err := loadFilterSendersFromFile(*filterList)
 	if err != nil {
 		return fmt.Errorf("load mail filter list: %w", err)
@@ -792,6 +821,9 @@ func runServe(args []string) error {
 	log.Printf("[serve] EnvPath=%s", strings.TrimSpace(*envPath))
 	log.Printf("[serve] CronConfig=%s", strings.TrimSpace(*cronConfig))
 	log.Printf("[serve] AgentCmd=%s", config.AgentCmd)
+	log.Printf("[serve] ExecSubjectKeyword=%q", config.ExecSubjectKeyword)
+	log.Printf("[serve] MailSMTPServer=%s", strings.TrimSpace(config.MailSmtpServer))
+	log.Printf("[serve] MailSMTPPort=%d", config.MailSmtpPort)
 
 	feishuEnabled := strings.TrimSpace(config.Feishu.AppID) != "" && strings.TrimSpace(config.Feishu.AppSecret) != ""
 	config.Feishu.Enable = feishuEnabled
@@ -1353,7 +1385,7 @@ func runCron(args []string) error {
 
 func usage() string {
 	return strings.TrimSpace(`Usage:
-  glaw serve [--agent-cmd <command-prefix>] [--cron-config <path>] [--mail-filter <path-or-dir>] [--env <path|auto>] [--dry-run] [--run-prompt <text>]
+  glaw serve [--agent-cmd <command-prefix>] [--cron-config <path>] [--mail-filter <path-or-dir>] [--env <path|auto>] [--exec-subject-keyword <keyword>] [--dry-run] [--run-prompt <text>]
   glaw mail latest -sender <addr> [--env <path|auto>]
   glaw cron list [--cron-config <path>]
   glaw cron check [--cron-config <path>] [--at <rfc3339>]
