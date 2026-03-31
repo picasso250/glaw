@@ -1,90 +1,101 @@
 # glaw
 
-Minimal open-source starting point for a mail-driven assistant gateway.
+`glaw` is a small gateway that reads trusted mail or Feishu messages and dispatches work to an external assistant command.  
+`glaw` 是一个小型网关，用来读取受信任的邮件或飞书消息，并把任务分发给外部 assistant 命令。
 
-## What it does
+## Core Rules / 核心规则
 
-`glaw` polls an IMAP inbox or accepts Feishu bot messages over a long connection, then dispatches work to an external assistant command.
+- Dispatch stays single-threaded.  
+  dispatch 必须保持单线程。
+- Email and Feishu share the same serialized dispatch path.  
+  邮件和飞书必须复用同一个串行 dispatch 入口。
+- The process should run from the repo root so it can access `gateway/` and `INIT.md`.  
+  进程应从仓库根目录启动，这样才能访问 `gateway/` 和 `INIT.md`。
 
-Dispatch principle:
+## Config / 配置
 
-- Gemini dispatch must stay single-threaded.
-- Do not run multiple assistant sessions in parallel against the same repo.
-- Email and Feishu must share the same serialized dispatch path.
+Copy `.env.example` to `.env`.  
+把 `.env.example` 复制为 `.env`。
 
-The current implementation is intentionally small:
+Required mail fields / 邮件必填项:
 
-- `cmd/glaw/main.go`: unified CLI entrypoint
-- `INIT.md`: initialization prompt file consumed by the assistant command
-- `.env.example`: local configuration template
+- `MAIL_USER`
+- `MAIL_PASS`
+- `MAIL_IMAP_SERVER`
+- `AGENT_CMD`
 
-## Configuration
+Optional / 可选项:
 
-Copy `.env.example` to `.env` and fill in:
+- `MAIL_SMTP_SERVER`
+- `MAIL_SMTP_PORT`
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_ALLOWED_OPEN_IDS`
+- `FEISHU_ALLOWED_CHAT_IDS`
 
-- `MAIL_USER`: IMAP login address
-- `MAIL_PASS`: IMAP password or app password
-- `MAIL_IMAP_SERVER`: IMAP host, for example `imap.example.com`
-- `AGENT_CMD`: assistant command prefix to execute; the gateway appends the prompt as the final argument. For example `gemini --yolo -p` or `node ...\\opencode -m zhipuai-coding-plan/glm-5 run`
-- `FEISHU_APP_ID`: Feishu app ID for the bot-enabled custom app
-- `FEISHU_APP_SECRET`: Feishu app secret for the bot-enabled custom app
-- `FEISHU_ALLOWED_OPEN_IDS`: comma-separated trusted Feishu sender `open_id` values
-- `FEISHU_ALLOWED_CHAT_IDS`: comma-separated trusted Feishu chat IDs
+Mail sender allowlist is read from `mail_filter_senders.txt`, one sender per line. Blank lines and `#` comments are ignored.  
+邮件发件人白名单从 `mail_filter_senders.txt` 读取，每行一个地址；空行和 `#` 注释会被忽略。
 
-Mail sender allowlist is no longer stored in `.env`. Put it in `./mail_filter_senders.txt` instead, one sender per line. Blank lines and `#` comments are ignored. A starter example is included at `./mail_filter_senders.example.txt`.
+## Main Commands / 主要命令
 
-## Run
-
-Build:
+Build / 编译:
 
 ```powershell
 go build ./...
 ```
 
-Start:
+Run the gateway / 启动网关:
 
 ```powershell
 go run ./cmd/glaw serve
 ```
 
-Read only the latest mail from one sender, then exit:
+Read only the latest mail from one sender / 只读取某个发件人的最新一封邮件:
 
 ```powershell
 go run ./cmd/glaw mail latest --sender cjwhshuyao@163.com
 ```
 
-Use a custom mail sender allowlist file or directory:
+Use explicit config files / 显式指定配置文件:
 
 ```powershell
-go run ./cmd/glaw serve --mail-filter .\mail_filter_senders.txt
-go run ./cmd/glaw serve --mail-filter .\
+go run ./cmd/glaw serve --env .\.env --mail-filter .\mail_filter_senders.txt --cron-config .\cron.json
 ```
 
-Use a single explicit `.env` file instead of upward lookup:
-
-```powershell
-go run ./cmd/glaw serve --env .\.env
-```
-
-Print the final effective `serve` configuration without starting IMAP, Feishu, or scheduler:
+Print the effective `serve` config and exit / 打印最终生效配置后退出:
 
 ```powershell
 go run ./cmd/glaw serve --env .\.env --mail-filter .\mail_filter_senders.txt --cron-config .\cron.json --dry-run
 ```
 
-Run one prompt through the configured `AGENT_CMD`, then exit without starting services:
+Run one prompt through the configured assistant and exit / 用当前 assistant 配置执行一次 prompt 后退出:
 
 ```powershell
-go run ./cmd/glaw serve --env .\.env --run-prompt "say hello"
+go run ./cmd/glaw serve --run-prompt "say hello"
 ```
 
-Use a custom scheduler config file:
+Build a local executable / 编译本地可执行文件:
 
 ```powershell
-go run ./cmd/glaw serve --cron-config .\cron.json
+go build -buildvcs=false -o ~/bin/glaw.exe ./cmd/glaw
 ```
 
-Inspect configured scheduler tasks:
+## Cron / 定时任务
+
+`serve` watches `cron.json` by default. If the file does not exist, the scheduler stays idle.  
+`serve` 默认会监听 `cron.json`；如果文件不存在，scheduler 会保持空闲。
+
+Supported schedules / 支持的调度:
+
+- `hourly`
+- `daily`
+
+Supported task types / 支持的任务类型:
+
+- `program` or empty `type`
+- `ai`
+
+Helpers / 辅助命令:
 
 ```powershell
 go run ./cmd/glaw cron list --cron-config .\cron.json
@@ -92,169 +103,48 @@ go run ./cmd/glaw cron check --cron-config .\cron.json
 go run ./cmd/glaw cron run --cron-config .\cron.json -name "daily-summary"
 ```
 
-Temporarily override the assistant runner for one `serve` process:
+## Feishu / 飞书
 
-```powershell
-go run ./cmd/glaw serve --agent-cmd "gemini --yolo -p"
-```
+When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are set, `glaw` starts a Feishu long-connection bot.  
+当设置了 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 后，`glaw` 会启动飞书长连接 bot。
 
-If the runner path itself contains spaces, wrap the whole argument in single quotes so PowerShell passes it through unchanged:
+Current behavior / 当前行为:
 
-```powershell
-go run ./cmd/glaw serve --agent-cmd '"C:\Program Files\nodejs\node.exe" C:\Users\MECHREV\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode -m zhipuai-coding-plan/glm-5 run'
-```
+- group plain text / image / file messages: ignore after raw logging  
+  群聊普通文本 / 图片 / 文件消息：只做原始日志记录，不进入 dispatch
+- group `@bot` text / image / file messages: dispatch inline  
+  群聊中 `@bot` 的文本 / 图片 / 文件消息：直接 inline dispatch
+- p2p text / image / file messages: dispatch inline  
+  私聊文本 / 图片 / 文件消息：直接 inline dispatch
 
-Build a local executable:
-
-```powershell
-go build -o ~/bin/glaw.exe ./cmd/glaw
-```
-
-Then run it:
-
-```powershell
-~/bin/glaw.exe serve
-```
-
-Dev loop:
-
-```powershell
-.\dev.ps1
-```
-
-Dev loop with a one-off agent command override:
-
-```powershell
-.\dev.ps1 -AgentCmd "gemini --yolo -p"
-```
-
-
-The process expects to be started from the repository root so it can access `gateway/` and `INIT.md`.
-
-Dispatch batching:
-
-- `dispatchCh` is buffered to `100`.
-- Each dispatch wake-up drains the current channel and batches that snapshot into one agent run.
-- all-email batch: use the email prompt
-- all-feishu batch: use the feishu prompt
-- all-ai batch: use the scheduled AI prompt
-- mixed batch: use the default prompt
-
-## Scheduler
-
-`serve` also watches `./cron.json` by default. If the file does not exist, the scheduler stays idle. A starter example is included at `./cron.json.example`.
-
-Supported schedules:
-
-- `hourly`: run once at every `HH:00`
-- `daily`: run at every configured hour in `hours`, where each value is `0-23`
-
-Supported task types:
-
-- `program` or empty `type`: execute `command` plus `args`
-- `ai`: enqueue `prompt` into the existing `dispatchCh`, so scheduled AI work stays inside the same serialized dispatch path as email and Feishu
-
-Manual cron helpers:
-
-- `glaw cron list`: print the current parsed task list
-- `glaw cron check`: show which tasks are due at `now` or at `--at <RFC3339>`
-- `glaw cron run -name <task-name>`: run one task immediately
-- `glaw cron run --all-due`: run only the tasks due at `now` or at `--at <RFC3339>`
-
-Mail helper CLI:
-
-- `glaw mail latest --sender <addr>`: connect to IMAP once, read only the latest mail from that sender, save it into `gateway/history`, then exit
-
-Example `./cron.json`:
-
-```json
-[
-  {
-    "name": "hourly-sync",
-    "schedule": "hourly",
-    "command": "python",
-    "args": ["scripts/sync.py"]
-  },
-  {
-    "name": "daily-summary",
-    "schedule": "daily",
-    "type": "ai",
-    "hours": [9, 21],
-    "prompt": "整理今天的进展并给出下一步建议。"
-  }
-]
-```
-
-## Feishu Bot
-
-When both `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are non-empty, the gateway starts a Feishu long-connection bot client using the official Go SDK. The current implementation handles inbound `im.message.receive_v1` text, post, image, and file events.
-
-Current Feishu routing rules:
-
-- group plain text / image / file messages: ignore after raw logging
-- group `@bot` text / image / file messages: dispatch inline
-- p2p text / image / file messages: dispatch inline
-- inbound image and file resources are downloaded into `gateway/media/` and referenced inside the inline prompt body
-
-Required Feishu setup:
-
-- enable the Bot ability for the app
-- subscribe the `im.message.receive_v1` event and publish the app version
-- grant `im:message:send_as_bot` so the gateway can reply as the bot
-- grant `im:message.group_msg` if you want to receive normal group messages, not only `@bot` mentions
-- grant the p2p message permission for bot chats if you want to receive all direct messages
-- `im:message:readonly` is useful for message read access, but it does not replace the bot send scope above
-- if you want the gateway to download user-sent images and files from messages, also grant `im:resource`; that is the message resource read permission used by the Feishu `message_resource.get` API
-
-If `im:message.group_msg` is missing, Feishu will typically only deliver group messages that explicitly mention the bot.
-
-## Notes Before Open Source
-
-- Replace the module path in `go.mod` with the final repository path.
-- Review the prompt text in `internal/gateway/dispatch.go` for product-specific policy.
-- The assistant command contract is still local and opinionated by design; if you want broader reuse, the next step is to abstract the assistant runner interface.
-
-## Cloudflare Executor
-
-A simpler remote-execution path now lives under `cloudflare-executor/`.
-
-- Worker code: `cloudflare-executor/src/worker.js`
-- Wrangler config template: `cloudflare-executor/wrangler.toml.example`
-- Protocol and deploy notes: `docs/executor-protocol.md`
-
-This path is intended to replace the more fragile mail-driven "smart rescuer" flow with a minimal task queue:
-
-- `POST /tasks`
-- `POST /tasks/claim`
-- `POST /tasks/:id/result`
-- `GET /tasks/:id`
-
-Use a non-empty `EXECUTOR_TOKEN` secret before deploying. The example config is set up for the custom domain `remote-executor.io99.xyz`.
-
-Task scripts should default to running in the executor's current working directory. Only use an explicit `cwd` override when the task truly depends on it.
-
-## Feishu Helper CLI
-
-Use the built binary for ad hoc Feishu history pulls:
+Useful helper commands / 常用辅助命令:
 
 ```powershell
 ~/bin/glaw.exe feishu list-messages -chat-id <chat_id> -page-size 20 -minutes 180
-```
-
-Send a Feishu reply directly and get immediate success or failure feedback:
-
-```powershell
 ~/bin/glaw.exe feishu send -message-id <message_id> -text "收到，我去处理"
 ~/bin/glaw.exe feishu send -message-id <message_id> -image .\answer.png
 ~/bin/glaw.exe feishu send -message-id <message_id> -file .\answer.docx
 ```
 
-The command sends immediately and prints whether the send succeeded.
+## Mail Executor / 邮件执行链
 
-## Feishu Context Lessons
+`glaw serve --exec-subject-keyword <keyword>` can bypass normal dispatch for trusted senders and execute one attached `.py` or `.ps1`.  
+`glaw serve --exec-subject-keyword <keyword>` 可以对受信任发件人绕过普通 dispatch，直接执行一个附件 `.py` 或 `.ps1`。
 
-- Pulling extra Feishu group context inside the gateway is architecturally cleaner than asking the agent to run ad hoc shell commands, but it has an important tradeoff in the current runner model.
-- Today the gateway launches the assistant through `AGENT_CMD` as a fresh CLI process each time. If the gateway performs a follow-up check and finds new context, the only available way to continue is to start a brand new assistant process again.
-- In practice this is slow for heavy CLI runners such as Gemini CLI, because process startup itself can take around 20 seconds.
-- It also means follow-up handling cannot reuse the previous assistant process memory or in-session reasoning state; it can only reconstruct context from files and prompt text.
-- Because of that, keeping Feishu follow-up checks inside prompt instructions is currently simpler than moving them fully into gateway-triggered re-entry. A better long-term fix would be a persistent assistant session, a resumable runner protocol, or a local service API instead of one-shot CLI launches.
+Current remote execution flow uses `claw-life-saver` as the main keyword.  
+当前远端执行流默认使用 `claw-life-saver` 作为主关键词。
+
+Behavior / 行为:
+
+- older remote versions reply with separate `stdout.txt` and `stderr.txt`  
+  旧版远端会分别回 `stdout.txt` 和 `stderr.txt`
+- newer remote versions can parse absolute file paths from the body and return one zip attachment containing `stdout`, `stderr`, and requested files  
+  新版远端可以解析正文中的绝对路径，并返回一个 zip，里面包含 `stdout`、`stderr` 和请求的文件
+
+## Related Paths / 相关路径
+
+- main CLI: `cmd/glaw/main.go`
+- mail execution: `cmd/glaw/mail_exec.go`
+- dispatcher: `internal/gateway/dispatch.go`
+- mail executor skill: `.agents/skills/mail-script-executor/`
+- Cloudflare executor: `cloudflare-executor/`
