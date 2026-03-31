@@ -1,4 +1,4 @@
 interface:
-  display_name: "Mail Script Dispatch"
-  short_description: "Send execution emails with attached scripts and inspect replies."
-  default_prompt: "Use this skill to send a script attachment for remote execution, then check the latest reply."
+  display_name: "Mail Script Executor"
+  short_description: "Send one execution script by mail, wait, then inspect the latest reply or zip."
+  default_prompt: "Use this skill to send a script attachment for remote execution, then check the latest reply and inspect zip attachments when present."

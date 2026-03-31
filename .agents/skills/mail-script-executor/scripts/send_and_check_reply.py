@@ -5,14 +5,61 @@ import pathlib
 import subprocess
 import sys
 import time
+import zipfile
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-def run(args: list[str], cwd: pathlib.Path | None = None) -> int:
+def run(args: list[str], cwd: pathlib.Path | None = None) -> tuple[int, str, str]:
     result = subprocess.run(args, cwd=str(cwd) if cwd else None, check=False)
-    return result.returncode
+    return result.returncode, "", ""
+
+
+def run_capture(args: list[str], cwd: pathlib.Path | None = None) -> tuple[int, str, str]:
+    result = subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def parse_saved_history_path(output: str) -> pathlib.Path | None:
+    for line in output.splitlines():
+        if line.startswith("saved="):
+            return pathlib.Path(line.split("=", 1)[1].strip())
+    return None
+
+
+def parse_attachment_paths(history_text: str, repo: pathlib.Path) -> list[pathlib.Path]:
+    attachments: list[pathlib.Path] = []
+    in_attachments = False
+    for raw_line in history_text.splitlines():
+        line = raw_line.rstrip()
+        if line == "Attachments:":
+            in_attachments = True
+            continue
+        if not in_attachments:
+            continue
+        if not line.startswith("- "):
+            continue
+        rel = line[2:].strip()
+        if not rel:
+            continue
+        attachments.append((repo / rel).resolve())
+    return attachments
+
+
+def inspect_zip(path: pathlib.Path) -> None:
+    print(f"=== zip entries: {path} ===")
+    with zipfile.ZipFile(path) as zf:
+        for info in zf.infolist():
+            print(f"{info.filename}\t{info.file_size}")
 
 
 def main() -> int:
@@ -61,7 +108,7 @@ def main() -> int:
     ]
     print("=== send ===")
     print(" ".join(send_cmd))
-    code = run(send_cmd, cwd=repo)
+    code, _, _ = run(send_cmd, cwd=repo)
     if code != 0:
         raise SystemExit(code)
 
@@ -79,9 +126,26 @@ def main() -> int:
     ]
     print("=== latest ===")
     print(" ".join(latest_cmd))
-    code = run(latest_cmd, cwd=repo)
+    code, stdout, stderr = run_capture(latest_cmd, cwd=repo)
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n")
+    if stderr:
+        print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
     if code != 0:
         raise SystemExit(code)
+
+    saved_path = parse_saved_history_path(stdout)
+    if saved_path is None:
+        return 0
+    if not saved_path.is_absolute():
+        saved_path = (repo / saved_path).resolve()
+    if not saved_path.exists():
+        return 0
+
+    attachments = parse_attachment_paths(saved_path.read_text(encoding="utf-8", errors="replace"), repo)
+    for attachment in attachments:
+        if attachment.suffix.lower() == ".zip" and attachment.exists():
+            inspect_zip(attachment)
     return 0
 
 
