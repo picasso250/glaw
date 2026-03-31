@@ -1,5 +1,5 @@
-当前目标是让 `glaw serve` 在 `.env` 解析完成后打印最终生效的 `MAIL_FILTER_SENDER` 过滤数组，便于确认 merge 与解析结果。 
-已在 [cmd/glaw/main.go](/C:/Users/MECHREV/glaw/cmd/glaw/main.go) 的 `runServe` 中加入 `log.Printf("[serve] FilterSenders=%q", config.FilterSenders)`，位置在 `loadEnv()` 成功并处理完 `-agent-cmd` 覆盖之后。 
-`.env` 机制仍是手写多层合并：`~/.env` 先读、上层目录到当前目录逐层后读覆盖前读，同名 key 采用最后值，然后才解析成 `config.FilterSenders`。 
-已执行 `go build ./...`，当前编译通过，没有发现语法或链接错误。 
-下一步如果要继续，建议实际运行一次 `glaw serve` 用不同层级的 `.env` 验证日志输出是否符合预期，并观察热重载 `MAIL_FILTER_SENDER` 的行为是否也需要同样打印。 
+当前主目标已经从“探测远端是否在线”推进到“通过邮件执行链完成 `claw-life-saver.exe` 自升级”，并且这次升级是通过远端实例自己拉起 detached 升级脚本完成的。 
+已完成的关键实现包括：`cmd/glaw/mail_exec.go` 支持把正文按行解析为存在的文件路径并统一打包 zip 回信、`mail-script-dispatch` 技能补充了 Windows detached PowerShell 必须优先使用 `-ExecutionPolicy Bypass -File` 的规则、以及远端 `C:\Users\cmwh\claw-life-saver\` 下已成功写入 `start-claw-life-saver.ps1` 和 `upgrade-claw-life-saver.ps1`。 
+当前验证结果是：发出 detached wrapper 后，再次发送探测邮件时远端已经返回单个 zip 附件，zip 内 `stdout.txt` 显示新进程为 `C:\Users\cmwh\bin\claw-life-saver.exe` PID `115684`，命令行仍是 `serve --env C:\Users\cmwh\claw-life-saver\.env --mail-filter C:\Users\cmwh\claw-life-saver\mail_filter_senders.txt --cron-config C:\Users\cmwh\claw-life-saver\cron.json --exec-subject-keyword claw-life-saver`。 
+`upgrade-claw-life-saver.log` 已随 zip 回传并确认升级链条真实执行过：旧 PID `120168` 被杀掉、随后在 `C:\Users\cmwh\glaw` 重新 `go build` 到 `C:\Users\cmwh\bin\claw-life-saver.exe`、最后用 detached `pwsh/powershell -NoProfile -ExecutionPolicy Bypass -File start-claw-life-saver.ps1` 成功拉起新实例，而 `claw-life-saver-stdout.log` 和 `claw-life-saver-stderr.log` 当前仍为空。 
+下一步最合理的动作是发一个只读 probe 再抓一次 `claw-life-saver.exe` 进程、`upgrade-claw-life-saver.log` 尾部、`claw-life-saver-stdout.log`/`stderr.log` 尾部和必要的版本信息，确认新版本稳定运行后再决定是否整理脚本、提交未提交改动并补文档。 

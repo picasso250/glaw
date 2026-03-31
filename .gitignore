@@ -4,9 +4,14 @@ gateway/media/*
 gateway/pending/*
 gateway/processing/*
 gateway/history/*
+gateway/outbox/*
 !gateway/media/.gitkeep
 !gateway/pending/.gitkeep
 !gateway/processing/.gitkeep
 !gateway/history/.gitkeep
 *.db
 *.exe
+tmp/
+dist/*.zip
+dist/shuyao-rescue/
+cloudflare-executor/.wrangler/
