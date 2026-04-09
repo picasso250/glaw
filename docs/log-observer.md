@@ -66,6 +66,10 @@ Upload responses now also include:
 - `logs/<host>/<service>/YYYY/MM/DD/HH/<timestamp>_<archive_name>`
 - `artifacts/<channel>/YYYY/MM/DD/HH/<timestamp>_<uuid>_<file_name>`
 
+Current bucket policy:
+
+- bucket `glaw-executor-results` expires all objects after 30 days
+
 ## KV Keys
 
 - `log-index:<host>:<service>:latest`
@@ -88,4 +92,5 @@ Upload responses now also include:
 
 - `python scripts/list_remote_logs.py --host cmwh --service shuyao`
 - `python scripts/download_remote_log.py --host cmwh --service shuyao`
+- `python scripts/fetch_remote_log_bundle.py --token <token> --host desktop-secpnpi --service shuyao`
 - `python scripts/upload_artifact_bundle.py --channel glaw-log-observer --file scripts/upload_remote_logs.py --file scripts/install_remote_log_uploader.ps1`
