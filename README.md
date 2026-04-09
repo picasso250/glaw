@@ -147,4 +147,26 @@ Behavior / 行为:
 - mail execution: `cmd/glaw/mail_exec.go`
 - dispatcher: `internal/gateway/dispatch.go`
 - mail executor skill: `.agents/skills/mail-script-executor/`
-- Cloudflare executor: `cloudflare-executor/`
+- Cloudflare log observer worker: `cloudflare-executor/`
+
+## Remote Log Observer / 远端日志观测
+
+The Cloudflare worker in `cloudflare-executor/` is now used as a remote log observer, not as a task executor.  
+`cloudflare-executor/` 现在用于远端日志观测，不再承担任务执行队列。
+
+Remote uploader / 远端上传脚本:
+
+- `scripts/upload_remote_logs.py`
+
+Local inspection helpers / 本地查看脚本:
+
+- `scripts/list_remote_logs.py`
+- `scripts/download_remote_log.py`
+
+Remote install helper / 远端安装脚本:
+
+- `scripts/install_remote_log_uploader.ps1`
+
+Reference docs / 参考文档:
+
+- `docs/log-observer.md`
