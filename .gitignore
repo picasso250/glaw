@@ -16,3 +16,4 @@ dist/*.zip
 dist/shuyao-rescue/
 cloudflare-executor/.wrangler/
 docs/remote-state.md
+cloudflare-file/.wrangler/
