@@ -20,6 +20,12 @@ export default {
       if (request.method === "GET" && path === "/logs/object") {
         return await getLogObject(url, env);
       }
+      if (request.method === "POST" && path === "/artifacts/upload") {
+        return await uploadArtifact(request, env);
+      }
+      if (request.method === "GET" && path === "/artifacts/object") {
+        return await getArtifactObject(url, env);
+      }
 
       return json({ ok: false, error: "not_found" }, 404);
     } catch (error) {
@@ -139,6 +145,58 @@ async function getLogObject(url, env) {
   });
 }
 
+async function uploadArtifact(request, env) {
+  const payload = await request.json();
+  const channel = normalizeName(payload.channel, "channel");
+  const uploadedAt = normalizeTimestamp(payload.timestamp);
+  const fileName = sanitizeFileName(String(payload.file_name || "artifact.zip"));
+  const contentType = String(payload.content_type || "application/zip");
+  const archiveBytes = decodeBase64Field(payload.file_base64, "file_base64");
+  const digestHex = await sha256Hex(archiveBytes);
+  const key = buildArtifactKey(channel, uploadedAt, fileName);
+
+  await env.EXECUTOR_RESULTS.put(key, archiveBytes, {
+    httpMetadata: { contentType },
+  });
+
+  return json({
+    ok: true,
+    artifact: {
+      channel,
+      key,
+      file_name: fileName,
+      content_type: contentType,
+      size: archiveBytes.byteLength,
+      sha256: digestHex,
+      uploaded_at: uploadedAt,
+      received_at: new Date().toISOString(),
+    },
+  });
+}
+
+async function getArtifactObject(url, env) {
+  const key = String(url.searchParams.get("key") || "").trim();
+  if (!key.startsWith("artifacts/")) {
+    return json({ ok: false, error: "invalid_key" }, 400);
+  }
+
+  const object = await env.EXECUTOR_RESULTS.get(key);
+  if (!object) {
+    return json({ ok: false, error: "object_not_found" }, 404);
+  }
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("cache-control", "private, max-age=60");
+  headers.set("content-disposition", `attachment; filename="${key.split("/").pop()}"`);
+
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
+}
+
 function buildObjectKey(host, service, uploadedAt, archiveName) {
   const ts = new Date(uploadedAt);
   const yyyy = String(ts.getUTCFullYear()).padStart(4, "0");
@@ -147,6 +205,17 @@ function buildObjectKey(host, service, uploadedAt, archiveName) {
   const hh = String(ts.getUTCHours()).padStart(2, "0");
   const safeTs = uploadedAt.replace(/[:]/g, "-").replace(/[.]/g, "_");
   return `logs/${host}/${service}/${yyyy}/${mm}/${dd}/${hh}/${safeTs}_${archiveName}`;
+}
+
+function buildArtifactKey(channel, uploadedAt, fileName) {
+  const ts = new Date(uploadedAt);
+  const yyyy = String(ts.getUTCFullYear()).padStart(4, "0");
+  const mm = String(ts.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(ts.getUTCDate()).padStart(2, "0");
+  const hh = String(ts.getUTCHours()).padStart(2, "0");
+  const safeTs = uploadedAt.replace(/[:]/g, "-").replace(/[.]/g, "_");
+  const nonce = crypto.randomUUID();
+  return `artifacts/${channel}/${yyyy}/${mm}/${dd}/${hh}/${safeTs}_${nonce}_${fileName}`;
 }
 
 function latestIndexKey(host, service) {
@@ -220,6 +289,12 @@ function clampInt(raw, fallback, min, max) {
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const view = new Uint8Array(digest);
+  return Array.from(view, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function json(body, status = 200) {

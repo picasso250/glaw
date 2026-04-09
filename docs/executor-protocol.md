@@ -10,6 +10,8 @@ Detailed operator notes live in [log-observer.md](./log-observer.md).
 - `GET /logs/index`
 - `GET /logs/latest`
 - `GET /logs/object`
+- `POST /artifacts/upload`
+- `GET /artifacts/object`
 
 ## Auth
 
@@ -20,7 +22,14 @@ Detailed operator notes live in [log-observer.md](./log-observer.md).
 ## Storage
 
 - R2 stores zip bundles under `logs/<host>/<service>/...`
+- R2 also stores ad hoc deployment bundles under `artifacts/<channel>/...`
 - KV stores recent metadata and latest pointers
+
+## Artifact Safety
+
+- There is no `latest`, list, or prefix browsing endpoint for artifacts.
+- Download requires both a valid bearer token and the exact `artifact key`.
+- Upload returns the exact `key` and `sha256`; pass both to the remote side over the trusted mail execution channel.
 
 ## Remote Client
 

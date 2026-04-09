@@ -162,6 +162,7 @@ Local inspection helpers / 本地查看脚本:
 
 - `scripts/list_remote_logs.py`
 - `scripts/download_remote_log.py`
+- `scripts/upload_artifact_bundle.py`
 
 Remote install helper / 远端安装脚本:
 

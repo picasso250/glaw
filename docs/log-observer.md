@@ -28,10 +28,13 @@ Remote log paths come from [remote-state.md](./remote-state.md):
 - `GET /logs/index?host=<host>&service=<service>&limit=<n>`
 - `GET /logs/latest?host=<host>&service=<service>`
 - `GET /logs/object?key=<r2-key>`
+- `POST /artifacts/upload`
+- `GET /artifacts/object?key=<artifact-key>`
 
 Auth remains:
 
 - `Authorization: Bearer <EXECUTOR_TOKEN>`
+- artifact download does not support list/latest APIs; the caller must know the exact key
 
 ## Upload Payload
 
@@ -54,6 +57,7 @@ Auth remains:
 ## R2 Keys
 
 - `logs/<host>/<service>/YYYY/MM/DD/HH/<timestamp>_<archive_name>`
+- `artifacts/<channel>/YYYY/MM/DD/HH/<timestamp>_<uuid>_<file_name>`
 
 ## KV Keys
 
@@ -77,3 +81,4 @@ Auth remains:
 
 - `python scripts/list_remote_logs.py --host cmwh --service shuyao`
 - `python scripts/download_remote_log.py --host cmwh --service shuyao`
+- `python scripts/upload_artifact_bundle.py --channel glaw-log-observer --file scripts/upload_remote_logs.py --file scripts/install_remote_log_uploader.ps1`
