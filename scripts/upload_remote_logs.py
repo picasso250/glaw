@@ -96,6 +96,26 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def time_parts(timestamp: str) -> tuple[str, str, str, str]:
+    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return (
+        f"{dt.year:04d}",
+        f"{dt.month:02d}",
+        f"{dt.day:02d}",
+        f"{dt.hour:02d}",
+    )
+
+
+def build_log_prefix(host: str, service: str, timestamp: str) -> str:
+    yyyy, mm, dd, hh = time_parts(timestamp)
+    return f"logs/{host}/{service}/{yyyy}/{mm}/{dd}/{hh}"
+
+
+def build_log_file_name(host: str, service: str, timestamp: str) -> str:
+    yyyy, mm, dd, hh = time_parts(timestamp)
+    return f"{host}__{service}__{yyyy}-{mm}-{dd}__{hh}.zip"
+
+
 def read_delta(path: Path, previous: dict, max_bytes: int) -> tuple[str, dict]:
     if not path.exists():
         return "", {"exists": False, "offset": 0, "size": 0}
@@ -195,32 +215,28 @@ def upload_one_service(
         service_state[str(path)] = next_state
 
     archive = build_zip(service, host, timestamp, file_payloads)
+    prefix = build_log_prefix(host, service, timestamp)
+    file_name = build_log_file_name(host, service, timestamp)
     response = post_json(
-        worker_url.rstrip("/") + "/logs/upload",
+        worker_url.rstrip("/") + "/objects/upload",
         token,
         {
-            "host": host,
-            "service": service,
+            "prefix": prefix,
             "timestamp": timestamp,
-            "archive_name": f"{service}-logs.zip",
-            "archive_base64": base64.b64encode(archive).decode("ascii"),
+            "file_name": file_name,
+            "file_base64": base64.b64encode(archive).decode("ascii"),
             "content_type": "application/zip",
-            "summary": {
-                "changed_files": changed_files,
-                "file_count": len(paths),
-                "max_bytes": max_bytes,
-            },
         },
     )
-    entry = response.get("entry") or {}
+    obj = response.get("object") or {}
     return {
         "service": service,
-        "key": entry.get("key", ""),
+        "key": obj.get("key", ""),
         "changed_files": changed_files,
-        "size": entry.get("size", 0),
-        "uploaded_at": entry.get("uploaded_at", timestamp),
-        "download_url": entry.get("download_url", ""),
-        "expires_at": entry.get("expires_at", ""),
+        "size": obj.get("size", 0),
+        "uploaded_at": obj.get("uploaded_at", timestamp),
+        "download_url": obj.get("download_url", ""),
+        "expires_at": obj.get("expires_at", ""),
     }
 
 

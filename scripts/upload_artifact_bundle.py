@@ -51,10 +51,11 @@ def post_json(url: str, token: str, payload: dict) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Upload a zip artifact bundle to the remote observer worker.")
+    parser = argparse.ArgumentParser(description="Upload a zip object bundle to the worker.")
     parser.add_argument("--worker-url", default=DEFAULT_WORKER_URL)
     parser.add_argument("--token", default=os.environ.get("EXECUTOR_TOKEN", ""))
-    parser.add_argument("--channel", required=True)
+    parser.add_argument("--prefix", default="")
+    parser.add_argument("--channel", default="")
     parser.add_argument("--zip", default="", help="existing zip file to upload")
     parser.add_argument("--file", action="append", default=[], help="file or directory to bundle; may repeat")
     parser.add_argument("--base-dir", default="", help="optional base directory for zip relative paths")
@@ -88,18 +89,26 @@ def main() -> int:
     payload_bytes = zip_path.read_bytes()
     sha256 = hashlib.sha256(payload_bytes).hexdigest()
     upload_name = args.name.strip() or zip_path.name
+    prefix = args.prefix.strip()
+    if not prefix:
+        channel = args.channel.strip()
+        if not channel:
+            print("provide --prefix or --channel", file=sys.stderr)
+            return 1
+        prefix = f"artifacts/{channel}"
+
     payload = {
-        "channel": args.channel,
+        "prefix": prefix,
         "timestamp": args.timestamp.strip() or utc_now(),
         "file_name": upload_name,
         "file_base64": base64.b64encode(payload_bytes).decode("ascii"),
         "content_type": "application/zip",
     }
-    response = post_json(args.worker_url.rstrip("/") + "/artifacts/upload", token, payload)
-    artifact = response.get("artifact") or {}
-    artifact["local_sha256"] = sha256
-    artifact["source_zip"] = str(zip_path)
-    print(json.dumps({"ok": True, "artifact": artifact}, ensure_ascii=False, indent=2))
+    response = post_json(args.worker_url.rstrip("/") + "/objects/upload", token, payload)
+    obj = response.get("object") or {}
+    obj["local_sha256"] = sha256
+    obj["source_zip"] = str(zip_path)
+    print(json.dumps({"ok": True, "object": obj}, ensure_ascii=False, indent=2))
     return 0
 
 

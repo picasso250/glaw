@@ -160,12 +160,14 @@ Remote uploader / 远端上传脚本:
 
 Local inspection helpers / 本地查看脚本:
 
-- `scripts/list_remote_logs.py`
-- `scripts/download_remote_log.py`
+- `scripts/download_object.py`
 - `scripts/fetch_remote_log_bundle.py`
 - `scripts/upload_artifact_bundle.py`
 
-Uploads now return a 30-day signed `download_url`, so remote install flows can fetch one bundle without needing the long-lived admin token.
+Uploads now return a 30-day signed `download_url`, and both logs and artifacts use the same object API:
+
+- `POST /objects/upload`
+- `GET /objects/object?key=...`
 
 Remote install helper / 远端安装脚本:
 

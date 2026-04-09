@@ -1,13 +1,12 @@
 # Log Observer
 
-This reuses the old `cloudflare-executor/` worker deployment as a log observer channel.
+This reuses the old `cloudflare-executor/` worker deployment as a generic object channel, with logs as one naming convention on top.
 
 ## Goal
 
 - remote machine uploads one zip per service every hour
-- bundles land in R2
-- KV stores only recent metadata for browsing
-- local operators can list and download bundles on demand
+- bundles land in R2 with deterministic hourly keys
+- local operators can download bundles directly by key or signed URL
 
 ## Services
 
@@ -24,35 +23,24 @@ Remote log paths come from [remote-state.md](./remote-state.md):
 
 ## HTTP API
 
-- `POST /logs/upload`
-- `GET /logs/index?host=<host>&service=<service>&limit=<n>`
-- `GET /logs/latest?host=<host>&service=<service>`
-- `GET /logs/object?key=<r2-key>`
-- `POST /artifacts/upload`
-- `GET /artifacts/object?key=<artifact-key>`
+- `POST /objects/upload`
+- `GET /objects/object?key=<object-key>`
 
 Auth remains:
 
 - `Authorization: Bearer <EXECUTOR_TOKEN>`
 - uploads return a 30-day signed `download_url`
 - object download supports either bearer auth or a valid signed `download_url`
-- artifact download does not support list/latest APIs; the caller must know the exact key
 
 ## Upload Payload
 
 ```json
 {
-  "host": "cmwh",
-  "service": "shuyao",
+  "prefix": "logs/desktop-secpnpi/shuyao/2026/04/09/10",
   "timestamp": "2026-04-09T09:00:00Z",
-  "archive_name": "shuyao-logs.zip",
-  "archive_base64": "<base64 zip>",
-  "content_type": "application/zip",
-  "summary": {
-    "changed_files": 2,
-    "file_count": 3,
-    "max_bytes": 262144
-  }
+  "file_name": "desktop-secpnpi__shuyao__2026-04-09__10.zip",
+  "file_base64": "<base64 zip>",
+  "content_type": "application/zip"
 }
 ```
 
@@ -63,18 +51,12 @@ Upload responses now also include:
 
 ## R2 Keys
 
-- `logs/<host>/<service>/YYYY/MM/DD/HH/<timestamp>_<archive_name>`
-- `artifacts/<channel>/YYYY/MM/DD/HH/<timestamp>_<uuid>_<file_name>`
+- `logs/<host>/<service>/YYYY/MM/DD/HH/<host>__<service>__YYYY-MM-DD__HH.zip`
+- `artifacts/<channel>/<file_name>`
 
 Current bucket policy:
 
 - bucket `glaw-executor-results` expires all objects after 30 days
-
-## KV Keys
-
-- `log-index:<host>:<service>:latest`
-- `log-index:<host>:<service>:recent`
-- `log-index:<host>:<service>:<timestamp>`
 
 ## Remote Install Flow
 
@@ -90,7 +72,6 @@ Current bucket policy:
 
 ## Local Tools
 
-- `python scripts/list_remote_logs.py --host cmwh --service shuyao`
-- `python scripts/download_remote_log.py --host cmwh --service shuyao`
-- `python scripts/fetch_remote_log_bundle.py --token <token> --host desktop-secpnpi --service shuyao`
-- `python scripts/upload_artifact_bundle.py --channel glaw-log-observer --file scripts/upload_remote_logs.py --file scripts/install_remote_log_uploader.ps1`
+- `python scripts/fetch_remote_log_bundle.py`
+- `python scripts/download_object.py --key logs/... --output tmp\\one.zip`
+- `python scripts/upload_artifact_bundle.py --channel glaw-log-observer --file scripts/upload_remote_logs.py`
