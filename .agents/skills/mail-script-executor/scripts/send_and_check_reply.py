@@ -4,7 +4,6 @@ import argparse
 import pathlib
 import subprocess
 import sys
-import time
 import zipfile
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -64,7 +63,7 @@ def inspect_zip(path: pathlib.Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Send an execution email, wait, then inspect the latest reply with glaw."
+        description="Send an execution email, then inspect the latest reply with glaw."
     )
     parser.add_argument("--to", required=True, help="Recipient email address")
     parser.add_argument("--subject", required=True, help="Mail subject, should include exec keyword")
@@ -72,7 +71,12 @@ def main() -> int:
     parser.add_argument("--attachment", required=True, help="Single script attachment path")
     parser.add_argument("--reply-sender", required=True, help="Sender address to inspect with glaw mail latest")
     parser.add_argument("--repo", required=True, help="Path to the glaw repo used for mail latest")
-    parser.add_argument("--wait-seconds", type=int, default=30, help="Seconds to wait before checking latest reply")
+    parser.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=60,
+        help="Maximum seconds for glaw mail latest to wait for a newer reply before falling back to current latest",
+    )
     parser.add_argument(
         "--send-email-script",
         default=str(pathlib.Path(__file__).resolve().parents[2] / "send-email" / "scripts" / "send_email.py"),
@@ -112,9 +116,6 @@ def main() -> int:
     if code != 0:
         raise SystemExit(code)
 
-    print(f"=== sleep {args.wait_seconds}s ===")
-    time.sleep(args.wait_seconds)
-
     latest_cmd = [
         "go",
         "run",
@@ -123,6 +124,8 @@ def main() -> int:
         "latest",
         "--sender",
         args.reply_sender,
+        "--max-sleep-seconds",
+        str(args.wait_seconds),
     ]
     print("=== latest ===")
     print(" ".join(latest_cmd))

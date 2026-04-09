@@ -680,107 +680,6 @@ func mailLoop(config Config, db *sql.DB, dispatchCh chan gatewaypkg.DispatchRequ
 	}
 }
 
-func runMailLatest(args []string) error {
-	fs := flag.NewFlagSet("mail latest", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	envPath := fs.String("env", "auto", "env file path, or 'auto' to use upward lookup")
-	sender := fs.String("sender", "", "one sender email address to inspect")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected arguments for mail latest: %s", strings.Join(fs.Args(), " "))
-	}
-	if strings.TrimSpace(*sender) == "" {
-		return fmt.Errorf("missing -sender")
-	}
-	if info, err := os.Stat("gateway"); err != nil || !info.IsDir() {
-		return fmt.Errorf("current working directory must be glaw root: missing gateway/")
-	}
-
-	config, err := loadEnv(*envPath)
-	if err != nil {
-		return fmt.Errorf("load .env: %w", err)
-	}
-	config.FilterSenders = parseFilterSenders(*sender)
-	if len(config.FilterSenders) != 1 {
-		return fmt.Errorf("mail latest requires exactly one sender")
-	}
-
-	if err := gatewaypkg.EnsureRuntimeDirs(); err != nil {
-		return fmt.Errorf("ensure runtime dirs: %w", err)
-	}
-
-	c, err := connectMail(config)
-	if err != nil {
-		return err
-	}
-	defer c.Logout()
-
-	_, err = c.Select("INBOX", false)
-	if err != nil {
-		return fmt.Errorf("select inbox: %w", err)
-	}
-
-	uids, err := c.UidSearch(imap.NewSearchCriteria())
-	if err != nil {
-		return fmt.Errorf("search inbox: %w", err)
-	}
-	if len(uids) == 0 {
-		return fmt.Errorf("no mail in inbox")
-	}
-
-	seqset := new(imap.SeqSet)
-	seqset.AddNum(uids...)
-	messages := make(chan *imap.Message, len(uids))
-	fetchErrCh := make(chan error, 1)
-	go func() {
-		fetchErrCh <- c.UidFetch(seqset, []imap.FetchItem{imap.FetchEnvelope, imap.FetchUid}, messages)
-	}()
-
-	var latestMsg *imap.Message
-	var latestSender string
-	for msg := range messages {
-		if msg == nil || msg.Envelope == nil || len(msg.Envelope.From) == 0 {
-			continue
-		}
-		emailAddr := strings.ToLower(msg.Envelope.From[0].MailboxName + "@" + msg.Envelope.From[0].HostName)
-		if !senderMatches(config.FilterSenders, emailAddr) {
-			continue
-		}
-		if latestMsg == nil || msg.Uid > latestMsg.Uid {
-			latestMsg = msg
-			latestSender = emailAddr
-		}
-	}
-	if err := <-fetchErrCh; err != nil {
-		return fmt.Errorf("fetch envelope: %w", err)
-	}
-	if latestMsg == nil {
-		return fmt.Errorf("no mail found for sender %s", config.FilterSenders[0])
-	}
-
-	archivedEmail, err := fetchArchivedEmailByUID(c, latestMsg.Uid, latestMsg.Envelope)
-	if err != nil {
-		return err
-	}
-	if archivedEmail == nil {
-		return fmt.Errorf("latest mail uid %d has empty body", latestMsg.Uid)
-	}
-
-	archiveContent := gatewaypkg.BuildEmailArchiveContent(*archivedEmail)
-	archiveFile, err := gatewaypkg.SaveHistoryMessage("email_latest", fmt.Sprintf("%d", latestMsg.Uid), latestSender, archiveContent, time.Now())
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("latest_uid=%d\n", latestMsg.Uid)
-	fmt.Printf("sender=%s\n", latestSender)
-	fmt.Printf("subject=%s\n", latestMsg.Envelope.Subject)
-	fmt.Printf("saved=%s\n", archiveFile)
-	return nil
-}
-
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -1386,7 +1285,7 @@ func runCron(args []string) error {
 func usage() string {
 	return strings.TrimSpace(`Usage:
   glaw serve [--agent-cmd <command-prefix>] [--cron-config <path>] [--mail-filter <path-or-dir>] [--env <path|auto>] [--exec-subject-keyword <keyword>] [--dry-run] [--run-prompt <text>]
-  glaw mail latest -sender <addr> [--env <path|auto>]
+  glaw mail latest -sender <addr> [--env <path|auto>] [--max-sleep-seconds 60] [--poll-interval-seconds 2]
   glaw cron list [--cron-config <path>]
   glaw cron check [--cron-config <path>] [--at <rfc3339>]
   glaw cron run [--cron-config <path>] [-name <task-name> | --all-due] [--at <rfc3339>] [--env <path|auto>]
