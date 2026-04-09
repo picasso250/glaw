@@ -34,6 +34,8 @@ Remote log paths come from [remote-state.md](./remote-state.md):
 Auth remains:
 
 - `Authorization: Bearer <EXECUTOR_TOKEN>`
+- uploads return a 30-day signed `download_url`
+- object download supports either bearer auth or a valid signed `download_url`
 - artifact download does not support list/latest APIs; the caller must know the exact key
 
 ## Upload Payload
@@ -53,6 +55,11 @@ Auth remains:
   }
 }
 ```
+
+Upload responses now also include:
+
+- `download_url`
+- `expires_at`
 
 ## R2 Keys
 

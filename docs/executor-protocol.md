@@ -28,8 +28,11 @@ Detailed operator notes live in [log-observer.md](./log-observer.md).
 ## Artifact Safety
 
 - There is no `latest`, list, or prefix browsing endpoint for artifacts.
-- Download requires both a valid bearer token and the exact `artifact key`.
-- Upload returns the exact `key` and `sha256`; pass both to the remote side over the trusted mail execution channel.
+- Download supports either:
+  - `Authorization: Bearer <EXECUTOR_TOKEN>`
+  - a signed `download_url` returned at upload time
+- Upload returns the exact `key`, `sha256`, `download_url`, and `expires_at`.
+- Signed download URLs expire after 30 days by default.
 
 ## Remote Client
 

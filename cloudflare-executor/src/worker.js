@@ -1,29 +1,43 @@
 export default {
   async fetch(request, env) {
     try {
-      if (!isAuthorized(request, env)) {
-        return json({ ok: false, error: "unauthorized" }, 401);
-      }
-
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/+$/, "") || "/";
 
       if (request.method === "POST" && path === "/logs/upload") {
+        if (!isAuthorized(request, env)) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await uploadLogBundle(request, env);
       }
       if (request.method === "GET" && path === "/logs/index") {
+        if (!isAuthorized(request, env)) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await getLogIndex(url, env);
       }
       if (request.method === "GET" && path === "/logs/latest") {
+        if (!isAuthorized(request, env)) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await getLatestLog(url, env);
       }
       if (request.method === "GET" && path === "/logs/object") {
+        if (!(isAuthorized(request, env) || await hasValidSignedDownload(url, env))) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await getLogObject(url, env);
       }
       if (request.method === "POST" && path === "/artifacts/upload") {
+        if (!isAuthorized(request, env)) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await uploadArtifact(request, env);
       }
       if (request.method === "GET" && path === "/artifacts/object") {
+        if (!(isAuthorized(request, env) || await hasValidSignedDownload(url, env))) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
         return await getArtifactObject(url, env);
       }
 
@@ -42,6 +56,7 @@ export default {
 };
 
 const RECENT_LIMIT = 168;
+const DEFAULT_SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
 
 function isAuthorized(request, env) {
   const expected = (env.EXECUTOR_TOKEN || "").trim();
@@ -81,7 +96,11 @@ async function uploadLogBundle(request, env) {
     key: objectKey,
     size: archiveBytes.byteLength,
     received_at: new Date().toISOString(),
+    expires_at: buildExpiresAt(DEFAULT_SIGNED_URL_TTL_SEC),
+    download_url: "",
   };
+
+  indexEntry.download_url = await buildSignedDownloadUrl(request, env, objectKey, indexEntry.expires_at);
 
   const latestKey = latestIndexKey(host, service);
   const recentKey = recentIndexKey(host, service);
@@ -159,6 +178,8 @@ async function uploadArtifact(request, env) {
     httpMetadata: { contentType },
   });
 
+  const expiresAt = buildExpiresAt(DEFAULT_SIGNED_URL_TTL_SEC);
+
   return json({
     ok: true,
     artifact: {
@@ -170,6 +191,8 @@ async function uploadArtifact(request, env) {
       sha256: digestHex,
       uploaded_at: uploadedAt,
       received_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      download_url: await buildSignedDownloadUrl(request, env, key, expiresAt),
     },
   });
 }
@@ -195,6 +218,27 @@ async function getArtifactObject(url, env) {
     status: 200,
     headers,
   });
+}
+
+async function hasValidSignedDownload(url, env) {
+  const key = String(url.searchParams.get("key") || "").trim();
+  const exp = String(url.searchParams.get("exp") || "").trim();
+  const sig = String(url.searchParams.get("sig") || "").trim().toLowerCase();
+  if (!key || !exp || !sig) {
+    return false;
+  }
+
+  const expSec = Number(exp);
+  if (!Number.isFinite(expSec)) {
+    return false;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (nowSec > expSec) {
+    return false;
+  }
+
+  const expected = await signDownload(env, key, exp);
+  return timingSafeEqual(sig, expected);
 }
 
 function buildObjectKey(host, service, uploadedAt, archiveName) {
@@ -296,6 +340,44 @@ async function sha256Hex(bytes) {
   const view = new Uint8Array(digest);
   return Array.from(view, (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+async function signDownload(env, key, exp) {
+  const secret = (env.EXECUTOR_TOKEN || "").trim();
+  if (!secret) {
+    throw new Error("EXECUTOR_TOKEN is required for signed downloads");
+  }
+  const payload = encoder.encode(`${key}\n${exp}\n${secret}`);
+  return await sha256Hex(payload);
+}
+
+async function buildSignedDownloadUrl(request, env, key, expiresAtIso) {
+  const exp = String(Math.floor(new Date(expiresAtIso).getTime() / 1000));
+  const sig = await signDownload(env, key, exp);
+  const base = new URL(request.url);
+  const objectPath = key.startsWith("artifacts/") ? "/artifacts/object" : "/logs/object";
+  const signed = new URL(objectPath, base.origin);
+  signed.searchParams.set("key", key);
+  signed.searchParams.set("exp", exp);
+  signed.searchParams.set("sig", sig);
+  return signed.toString();
+}
+
+function buildExpiresAt(ttlSec) {
+  return new Date(Date.now() + ttlSec * 1000).toISOString();
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+const encoder = new TextEncoder();
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body, null, 2), {

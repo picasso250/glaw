@@ -164,6 +164,8 @@ Local inspection helpers / 本地查看脚本:
 - `scripts/download_remote_log.py`
 - `scripts/upload_artifact_bundle.py`
 
+Uploads now return a 30-day signed `download_url`, so remote install flows can fetch one bundle without needing the long-lived admin token.
+
 Remote install helper / 远端安装脚本:
 
 - `scripts/install_remote_log_uploader.ps1`

@@ -219,6 +219,8 @@ def upload_one_service(
         "changed_files": changed_files,
         "size": entry.get("size", 0),
         "uploaded_at": entry.get("uploaded_at", timestamp),
+        "download_url": entry.get("download_url", ""),
+        "expires_at": entry.get("expires_at", ""),
     }
 
 
