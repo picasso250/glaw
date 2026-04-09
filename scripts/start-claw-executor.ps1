@@ -1,6 +1,6 @@
 param(
     [string]$RunDir = (Join-Path $HOME "claw-executor"),
-    [string]$WorkerUrl = "https://remote-executor.io99.xyz",
+    [string]$WorkerUrl = "https://file.io99.xyz",
     [string]$AgentId = "claw-executor"
 )
 

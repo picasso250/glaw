@@ -1,6 +1,6 @@
 # Log Observer
 
-This reuses the old `cloudflare-executor/` worker deployment as a generic object channel, with logs as one naming convention on top.
+This uses the `cloudflare-file/` worker deployment as a generic object channel, with logs as one naming convention on top.
 
 ## Goal
 

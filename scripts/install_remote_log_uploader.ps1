@@ -1,7 +1,7 @@
 param(
     [string]$RepoDir = (Join-Path $HOME "glaw"),
     [string]$RunDir = (Join-Path $HOME "g-claw"),
-    [string]$WorkerUrl = "https://remote-executor.io99.xyz",
+    [string]$WorkerUrl = "https://file.io99.xyz",
     [string]$HostName = $env:COMPUTERNAME,
     [string]$Branch = "",
     [string]$TokenFile = (Join-Path $HOME ".glaw-log-observer-token.txt"),

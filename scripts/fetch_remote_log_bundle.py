@@ -56,7 +56,7 @@ def try_download(worker_url: str, token: str, key: str, output_zip: Path) -> boo
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download and extract one remote log bundle.")
-    parser.add_argument("--worker-url", default="https://remote-executor.io99.xyz")
+    parser.add_argument("--worker-url", default="https://file.io99.xyz")
     parser.add_argument("--token", default=resolve_default_token())
     parser.add_argument("--host", default="desktop-secpnpi")
     parser.add_argument("--service", default="shuyao")

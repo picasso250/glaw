@@ -1,6 +1,6 @@
 # Object Protocol
 
-`cloudflare-executor/` now exposes one generic object channel.
+`cloudflare-file/` now exposes one generic object channel.
 
 Detailed operator notes live in [log-observer.md](./log-observer.md).
 

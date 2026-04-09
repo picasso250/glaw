@@ -7,8 +7,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DEFAULT_WORKER_URL = "https://remote-executor.io99.xyz"
-DEFAULT_USER_AGENT = "glaw-object-viewer/1.0 (+https://remote-executor.io99.xyz)"
+DEFAULT_WORKER_URL = "https://file.io99.xyz"
+DEFAULT_USER_AGENT = "glaw-object-viewer/1.0 (+https://file.io99.xyz)"
 
 
 def request(url: str, token: str) -> bytes:

@@ -11,8 +11,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_WORKER_URL = "https://remote-executor.io99.xyz"
-DEFAULT_USER_AGENT = "glaw-artifact-uploader/1.0 (+https://remote-executor.io99.xyz)"
+DEFAULT_WORKER_URL = "https://file.io99.xyz"
+DEFAULT_USER_AGENT = "glaw-artifact-uploader/1.0 (+https://file.io99.xyz)"
 
 
 def utc_now() -> str:

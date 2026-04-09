@@ -12,8 +12,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_USER_AGENT = "glaw-log-uploader/1.0 (+https://remote-executor.io99.xyz)"
-DEFAULT_WORKER_URL = "https://remote-executor.io99.xyz"
+DEFAULT_USER_AGENT = "glaw-log-uploader/1.0 (+https://file.io99.xyz)"
+DEFAULT_WORKER_URL = "https://file.io99.xyz"
 DEFAULT_TOKEN_PATH = "~/.glaw-log-observer-token.txt"
 DEFAULT_MAX_BYTES = 256 * 1024
 

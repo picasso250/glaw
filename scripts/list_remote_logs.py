@@ -7,8 +7,8 @@ import sys
 import urllib.parse
 import urllib.request
 
-DEFAULT_WORKER_URL = "https://remote-executor.io99.xyz"
-DEFAULT_USER_AGENT = "glaw-log-viewer/1.0 (+https://remote-executor.io99.xyz)"
+DEFAULT_WORKER_URL = "https://file.io99.xyz"
+DEFAULT_USER_AGENT = "glaw-log-viewer/1.0 (+https://file.io99.xyz)"
 
 
 def request_json(url: str, token: str) -> dict:

@@ -9,7 +9,7 @@ import sys
 import time
 import urllib.request
 
-DEFAULT_USER_AGENT = "claw-executor/1.0 (+https://remote-executor.io99.xyz)"
+DEFAULT_USER_AGENT = "claw-executor/1.0 (+https://file.io99.xyz)"
 
 
 def request_json(url: str, token: str, payload: dict | None = None, method: str = "POST") -> dict:

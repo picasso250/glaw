@@ -1,7 +1,7 @@
 param(
     [string]$RepoDir = (Join-Path $HOME "glaw"),
     [string]$RunDir = (Join-Path $HOME "claw-executor"),
-    [string]$WorkerUrl = "https://remote-executor.io99.xyz",
+    [string]$WorkerUrl = "https://file.io99.xyz",
     [string]$AgentId = "claw-executor",
     [string]$TokenSource = (Join-Path $HOME ".glaw-executor-token.txt"),
     [string]$ResultPath = (Join-Path (Get-Location) "install-claw-executor-result.txt")
