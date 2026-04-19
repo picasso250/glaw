@@ -11,8 +11,10 @@ func TestBuildBatchPrompt_EmailIncludesExecutionProtocol(t *testing.T) {
 	for _, want := range []string{
 		"必须直接执行",
 		"先生成对应文件，再发送",
+		"邮件附件必须使用正确文件名和扩展名发送",
 		"不要再次向发件人索取邮件里已有的信息",
 		"默认先执行动作",
+		".docx、.xlsx、.pdf 不得变成无扩展名或 .bin",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("email prompt missing %q\nprompt:\n%s", want, got)
@@ -49,4 +51,3 @@ func TestBuildBatchPrompt_AIPromptIncludesExecutionProtocol(t *testing.T) {
 		}
 	}
 }
-

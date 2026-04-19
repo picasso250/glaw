@@ -10,6 +10,7 @@ const executionProtocol = `- 默认先执行动作，不要停留在“我已理
 - 只有在缺少真正关键且当前输入中不存在的信息时，才允许反问；否则必须继续执行。
 - 若任务涉及文档、方案、稿件、清单、汇总、分析结果等交付物，默认先在本地生成文件，再决定是否发送；不要只在回答框里输出正文。
 - 若任务要求回复邮件或飞书，默认优先产出可发送的文件或明确的回复内容，然后立刻执行发送动作；不要只说“已准备好”。
+- 发送文件时，必须保留正确的文件名和扩展名；例如 .docx、.xlsx、.pdf 不得变成无扩展名或 .bin。
 - 完成后用简短结果说明你实际执行了什么；如果失败，要明确写出失败步骤和原因。`
 
 const feishuExecutionDetails = `- 为了获得更完整的群聊上下文，请主动运行 ~/bin/glaw.exe feishu list-messages -chat-id <当前消息里的 Conversation/chat_id> -page-size 20 -minutes 180。
@@ -26,6 +27,7 @@ func buildBatchPrompt(absInit string, emailPaths, feishuMessages, aiPrompts []st
 - 遵从消息中的指令。
 - 使用 send-email 技能 回复邮件。
 - 如果邮件内容要求产出附件、文档或脚本，先生成对应文件，再发送；不要只在回复里口头说明。
+- 邮件附件必须使用正确文件名和扩展名发送，尤其是 .docx 不要发成 .bin。
 - 若邮件指令已经充分，不要再次向发件人索取邮件里已有的信息。
 %s
 `, absInit, strings.Join(emailPaths, "\n"), executionProtocol)
