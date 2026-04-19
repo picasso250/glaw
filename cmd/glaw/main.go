@@ -697,8 +697,8 @@ func runServe(args []string) error {
 		return fmt.Errorf("unexpected arguments for serve: %s", strings.Join(fs.Args(), " "))
 	}
 
-	if info, err := os.Stat("gateway"); err != nil || !info.IsDir() {
-		return fmt.Errorf("current working directory must be glaw root: missing gateway/")
+	if info, err := os.Stat("INIT.md"); err != nil || info.IsDir() {
+		return fmt.Errorf("current working directory must be glaw root: missing INIT.md")
 	}
 
 	config, err := loadEnv(*envPath)

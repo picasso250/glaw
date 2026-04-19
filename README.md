@@ -9,8 +9,8 @@
   dispatch 必须保持单线程。
 - Email and Feishu share the same serialized dispatch path.  
   邮件和飞书必须复用同一个串行 dispatch 入口。
-- The process should run from the repo root so it can access `gateway/` and `INIT.md`.  
-  进程应从仓库根目录启动，这样才能访问 `gateway/` 和 `INIT.md`。
+- The `serve` process should run from the repo root so it can access `INIT.md`; runtime gateway state is stored under `~/.gateway/`.  
+  `serve` 进程应从仓库根目录启动，这样才能访问 `INIT.md`；运行时 gateway 状态保存在 `~/.gateway/`。
 
 ## Config / 配置
 

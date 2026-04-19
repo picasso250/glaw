@@ -29,10 +29,6 @@ func runMailLatest(args []string) error {
 	if strings.TrimSpace(*sender) == "" {
 		return fmt.Errorf("missing -sender")
 	}
-	if info, err := os.Stat("gateway"); err != nil || !info.IsDir() {
-		return fmt.Errorf("current working directory must be glaw root: missing gateway/")
-	}
-
 	config, err := loadEnv(*envPath)
 	if err != nil {
 		return fmt.Errorf("load .env: %w", err)

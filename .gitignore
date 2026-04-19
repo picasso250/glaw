@@ -12,8 +12,7 @@ gateway/outbox/*
 *.db
 *.exe
 tmp/
-dist/*.zip
-dist/shuyao-rescue/
+dist/
 cloudflare-executor/.wrangler/
 docs/remote-state.md
 cloudflare-file/.wrangler/
