@@ -11,7 +11,7 @@ Use this skill to ship a local glaw change set to a trusted remote Windows machi
 
 ## Workflow
 
-1. Build the source bundle locally with [build-mail-source-bundle.py](/C:/Users/MECHREV/glaw/tmp/scripts/build-mail-source-bundle.py).
+1. Build the source bundle locally with [build-mail-source-bundle.py](/C:/Users/MECHREV/glaw/scripts/build-mail-source-bundle.py).
 2. Send a prepare mail with the target-specific one-off script in `tmp/scripts/`, such as [prepare-claw-life-saver-build.py](/C:/Users/MECHREV/glaw/tmp/scripts/prepare-claw-life-saver-build.py) or [prepare-shuyao-build.py](/C:/Users/MECHREV/glaw/tmp/scripts/prepare-shuyao-build.py), plus the source zip.
 3. Verify `build-info.txt` reports `exit_code=0` and points at the prepared remote exe path.
 4. Send a finalize mail with the target-specific detached cutover script, such as [finalize-claw-life-saver-upgrade.py](/C:/Users/MECHREV/glaw/tmp/scripts/finalize-claw-life-saver-upgrade.py).

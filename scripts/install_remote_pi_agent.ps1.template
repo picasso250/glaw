@@ -1,0 +1,40 @@
+$ErrorActionPreference = "Stop"
+
+$homeDir = $env:USERPROFILE
+$piDir = Join-Path $homeDir ".pi\agent"
+$settingsPath = Join-Path $piDir "settings.json"
+$modelsPath = Join-Path $piDir "models.json"
+$resultPath = Join-Path (Get-Location) "install_remote_pi_agent_result.txt"
+
+New-Item -ItemType Directory -Force -Path $piDir | Out-Null
+
+$settingsJson = @'
+__SETTINGS_JSON__
+'@
+
+$modelsJson = @'
+__MODELS_JSON__
+'@
+
+Set-Content -LiteralPath $settingsPath -Value $settingsJson -Encoding UTF8
+Set-Content -LiteralPath $modelsPath -Value $modelsJson -Encoding UTF8
+
+$npmCmd = (Get-Command npm.cmd -ErrorAction Stop).Source
+& $npmCmd install -g @mariozechner/pi-coding-agent@0.65.2
+
+$piCmd = (Get-Command pi.cmd -ErrorAction Stop).Source
+$modelList = & $piCmd --list-models | Out-String
+
+$report = @(
+    "HomeDir=$homeDir"
+    "NpmCmd=$npmCmd"
+    "PiCmd=$piCmd"
+    "SettingsPath=$settingsPath"
+    "ModelsPath=$modelsPath"
+    ""
+    "[list-models]"
+    $modelList.TrimEnd()
+)
+
+Set-Content -LiteralPath $resultPath -Value ($report -join [Environment]::NewLine) -Encoding UTF8
+Get-Content -LiteralPath $resultPath

@@ -62,3 +62,4 @@ $result = @(
 
 $result | Set-Content -LiteralPath $ResultPath -Encoding UTF8
 Write-Host "result: $ResultPath"
+Get-Content -LiteralPath $ResultPath

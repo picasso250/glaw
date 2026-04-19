@@ -38,6 +38,15 @@ def require_path(path: Path, label: str) -> None:
         raise SystemExit(f"Missing {label}: {path}")
 
 
+def resolve_attachment_path(raw: str | None) -> Path | None:
+    if raw is None:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    return RUN_DIR / candidate
+
+
 def latest_zip_in_media_dir() -> Path:
     candidates = [path for path in MEDIA_DIR.glob("*.zip") if path.is_file()]
     if not candidates:
@@ -47,8 +56,16 @@ def latest_zip_in_media_dir() -> Path:
 
 
 def main() -> int:
-    script_attachment_path = Path(sys.argv[1]) if len(sys.argv) >= 2 else None
-    source_zip_path = Path(sys.argv[2]) if len(sys.argv) >= 3 else None
+    script_attachment_path: Path | None = None
+    source_zip_path: Path | None = None
+    if len(sys.argv) >= 2:
+        first_arg = resolve_attachment_path(sys.argv[1])
+        if first_arg is not None and first_arg.suffix.lower() == ".zip":
+            source_zip_path = first_arg
+        else:
+            script_attachment_path = first_arg
+    if len(sys.argv) >= 3:
+        source_zip_path = resolve_attachment_path(sys.argv[2])
     temp_extract_dir = Path(tempfile.gettempdir()) / f"claw-life-saver-source-{uuid.uuid4().hex}"
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)

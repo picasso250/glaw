@@ -37,6 +37,7 @@ def run_powershell_json(script: str) -> list[dict[str, str]]:
 def list_pi_processes() -> list[dict[str, str]]:
     script = r"""
 $items = Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -notin @('powershell.exe', 'pwsh.exe') -and
   $_.CommandLine -and (
     $_.CommandLine -match '(^|["''\s\\/])pi(\.cmd|\.exe)?\s+-p(\s|$)' -or
     $_.CommandLine -match 'pi-coding-agent' -or
@@ -58,7 +59,9 @@ def list_glaw_processes() -> list[dict[str, str]]:
     script = rf"""
 $targetExe = '{target_exe}'
 $items = Get-CimInstance Win32_Process | Where-Object {{
-  $_.ExecutablePath -eq $targetExe
+  ($_.Name -ieq 'glaw.exe') -or
+  ($_.ExecutablePath -eq $targetExe) -or
+  ($_.ExecutablePath -and $_.ExecutablePath.ToLower().Contains('\bin\glaw.exe'))
 }} | Select-Object ProcessId, Name, ExecutablePath, CommandLine
 
 if ($null -eq $items) {{
